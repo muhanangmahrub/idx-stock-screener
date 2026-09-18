@@ -4,7 +4,12 @@ import pandas as pd
 import streamlit as st
 
 from screener.checklist import ANSWER_OPTIONS, QUALITATIVE_CHECKLIST, summarize_checklist
-from screener.data import get_fundamental_data, get_idx_official_data, get_price_history
+from screener.data import (
+    get_free_float_pct,
+    get_fundamental_data,
+    get_idx_official_data,
+    get_price_history,
+)
 from screener.execution import evaluate_position
 from screener.extrema import get_extrema
 from screener.formatting import format_rupiah, format_rupiah_compact
@@ -21,12 +26,23 @@ from screener.idx_data import get_stock_summary
 from screener.patterns import scan
 from screener.plotting import plot_candlestick
 from screener.portfolio import Position, review_portfolio
+from screener.universe import (
+    STATUS_PASSED,
+    candidates_to_dataframe,
+    filter_liquid_stocks,
+    screen_universe,
+)
 
 st.set_page_config(page_title="IDX Stock Screener", layout="wide")
 
 # Ringkasan Saham IDX memuat semua emiten dalam satu request; cukup diambil
 # sekali per jam, bukan tiap klik.
 load_stock_summary = st.cache_data(ttl=3600, show_spinner=False)(get_stock_summary)
+
+# Fetcher per emiten untuk screening massal. Di-cache supaya menjalankan ulang
+# (mis. ganti blacklist) tidak mengulang ratusan request.
+load_free_float_pct = st.cache_data(ttl=86400, show_spinner=False)(get_free_float_pct)
+load_fundamental_data = st.cache_data(ttl=3600, show_spinner=False)(get_fundamental_data)
 
 # Field input yang bisa terisi otomatis dari sumber data. Widget ber-key
 # mengabaikan perubahan `value=`, jadi prefill ditulis ke session_state.
@@ -110,6 +126,8 @@ with st.sidebar:
     idx_official = st.session_state.get("idx_data") or {}
     if fetched:
         st.caption(f"yfinance: {fetched['ticker']} terisi.")
+        for note in fetched.get("data_notes") or []:
+            st.warning(note)
     if idx_official:
         st.caption(f"IDX resmi: {idx_official['ticker']} per {idx_official['date']}.")
 
@@ -125,8 +143,14 @@ st.warning(
     "keputusan investasi."
 )
 
-tab_fundamental, tab_teknikal, tab_portofolio, tab_checklist = st.tabs(
-    ["Lapis 1 - Fundamental", "Lapis 2 - Teknikal", "Portofolio", "Checklist & Eksekusi"]
+tab_fundamental, tab_massal, tab_teknikal, tab_portofolio, tab_checklist = st.tabs(
+    [
+        "Lapis 1 - Fundamental",
+        "Screening massal",
+        "Lapis 2 - Teknikal",
+        "Portofolio",
+        "Checklist & Eksekusi",
+    ]
 )
 
 # --- Lapis 1: Fundamental (value investing, metode Teguh Hidayat) ---
@@ -322,6 +346,93 @@ with tab_fundamental:
                 big_rupiah_metric(m[0], "30% nilai transaksi harian", limit.by_liquidity)
                 big_rupiah_metric(m[1], "20% liquid net worth", limit.by_net_worth)
                 big_rupiah_metric(m[2], "Batas yang mengikat", limit.max_position)
+
+# --- Screening massal: bagian A + C dijalankan ke seluruh universe IDX ---
+with tab_massal:
+    st.caption(
+        "Screening awal (likuiditas, free float, ROE) lalu aturan valuasi murah "
+        "(PER/PBV) untuk semua emiten IDX, bertahap: likuiditas dari Ringkasan "
+        "Saham (instan), free float dari idx.co.id, lalu ROE/PER/PBV dari yfinance "
+        "hanya untuk yang masih bertahan. Semua emiten dinilai dengan batas "
+        "small cap (PER ≤ 8 atau PBV ≤ 0,7) karena blue chip tidak bisa "
+        "dibedakan otomatis; blue chip dengan PER 8-12 diberi catatan untuk "
+        "dicek manual. Hasilnya daftar kandidat untuk dianalisis manual - "
+        "bukan rekomendasi."
+    )
+
+    with st.container(border=True):
+        c = st.columns([2, 1])
+        with c[0]:
+            blacklist_text = st.text_input(
+                "Blacklist manual (kode dipisah koma)",
+                placeholder="mis. ABCD, EFGH",
+                help="Saham bandar/gorengan menurut penilaianmu; tidak dideteksi otomatis.",
+            )
+        with c[1]:
+            max_candidates = st.number_input(
+                "Batasi jumlah emiten (0 = semua)",
+                min_value=0,
+                value=0,
+                help="Urut dari nilai transaksi terbesar. Berguna untuk uji coba "
+                "cepat sebelum menjalankan ke ratusan emiten.",
+            )
+        blacklist = {
+            code.strip().upper() for code in blacklist_text.split(",") if code.strip()
+        }
+
+    if st.button("Jalankan screening massal", type="primary", width="stretch"):
+        with st.spinner("Mengambil Ringkasan Saham IDX..."):
+            summary = load_stock_summary()
+        liquid = filter_liquid_stocks(summary)
+        if not liquid:
+            st.error("Ringkasan Saham IDX tidak didapat (akses ditolak / endpoint berubah).")
+        else:
+            total_universe = len(summary)
+            if max_candidates > 0:
+                liquid = liquid[: int(max_candidates)]
+
+            progress_bar = st.progress(0.0, text="Memulai...")
+
+            def show_progress(done: int, total: int, code: str) -> None:
+                progress_bar.progress(done / total, text=f"{done}/{total} · {code}")
+
+            screened = screen_universe(
+                liquid,
+                fetch_free_float=load_free_float_pct,
+                fetch_fundamental=load_fundamental_data,
+                blacklist=blacklist,
+                on_progress=show_progress,
+            )
+            progress_bar.empty()
+            st.session_state["universe"] = {
+                "total_universe": total_universe,
+                "liquid_count": len(liquid),
+                "date": str(summary["Date"].iloc[0])[:10],
+                "results": screened,
+            }
+
+    universe = st.session_state.get("universe")
+    if universe:
+        results = universe["results"]
+        passed = [c for c in results if c.status == STATUS_PASSED]
+
+        m = st.columns(3)
+        m[0].metric("Emiten di Ringkasan Saham", universe["total_universe"])
+        m[1].metric("Lolos likuiditas (diproses)", universe["liquid_count"])
+        m[2].metric("Lolos screening + valuasi murah", len(passed))
+        st.caption(
+            f"Data Ringkasan Saham per {universe['date']} (satu hari bursa). "
+            "Angka free float/ROE/PER/PBV adalah estimasi otomatis - verifikasi "
+            "manual sebelum masuk watchlist. PBV kosong berarti yfinance tidak "
+            "memberi angka yang valid (lihat kolom catatan)."
+        )
+
+        show_only_passed = st.checkbox("Tampilkan hanya yang lolos", value=True)
+        table = candidates_to_dataframe(passed if show_only_passed else results)
+        if table.empty:
+            st.info("Tidak ada emiten yang lolos screening awal + valuasi murah.")
+        else:
+            st.dataframe(table, width="stretch", hide_index=True)
 
 # --- Lapis 2: Teknikal (chart pattern, Edianto Ong) ---
 with tab_teknikal:

@@ -1,10 +1,10 @@
 """Filter fundamental (Lapis 1), mengacu pada metode Teguh Hidayat.
 
 Angka-angka di modul ini diambil dari CLAUDE.md bagian "Spesifikasi metode
-Teguh Hidayat (lapis 1)", bukan tebakan. Sudah diimplementasikan: bagian A
-(screening awal), B (valuasi harga absolut), C (valuasi murah), D (manajemen
-risiko posisi). Belum: E (alokasi portofolio) dan F (eksekusi & horizon) -
-lihat CLAUDE.md sebelum menambahkannya.
+Teguh Hidayat (lapis 1)", bukan tebakan. Modul ini mencakup bagian A
+(screening awal), B (valuasi harga absolut), C (valuasi murah), dan D
+(manajemen risiko posisi). Bagian E ada di portfolio.py, bagian F di
+execution.py, checklist kualitatif di checklist.py.
 """
 
 from dataclasses import dataclass, field
@@ -86,14 +86,19 @@ def passes_initial_screening(
     return ScreeningResult(ticker=ticker, passed=not reasons, reasons=reasons, notes=notes)
 
 
-def is_cheap_valuation(per: float, pbv: float, is_blue_chip: bool) -> bool:
+def is_cheap_valuation(per: float | None, pbv: float | None, is_blue_chip: bool) -> bool:
     """Aturan valuasi murah (CLAUDE.md bagian C).
 
     Blue chip murah bila PER <= 12 ATAU PBV <= 0.7.
     Small cap murah bila PER <= 8 ATAU PBV <= 0.7.
+
+    Rasio yang tidak tersedia (None) tidak bisa membuktikan "murah", jadi
+    dianggap tidak memenuhi sisi itu; sisi lain tetap dinilai.
     """
     max_per = BLUE_CHIP_MAX_PER if is_blue_chip else SMALL_CAP_MAX_PER
-    return per <= max_per or pbv <= MAX_PBV_CHEAP
+    cheap_by_per = per is not None and per <= max_per
+    cheap_by_pbv = pbv is not None and pbv <= MAX_PBV_CHEAP
+    return cheap_by_per or cheap_by_pbv
 
 
 @dataclass

@@ -43,6 +43,19 @@ def _latest_row_value(statement: pd.DataFrame, row_name: str) -> float | None:
     return float(series.iloc[0]) if not series.empty else None
 
 
+def _book_value_currency_matches_price(info: dict) -> bool:
+    """True bila mata uang laporan keuangan sama dengan mata uang harga saham.
+
+    Kalau salah satu tidak diketahui, dianggap cocok supaya tidak membuang
+    data tanpa alasan.
+    """
+    price_currency = info.get("currency")
+    statement_currency = info.get("financialCurrency")
+    if not price_currency or not statement_currency:
+        return True
+    return price_currency == statement_currency
+
+
 def get_fundamental_data(ticker: str) -> dict:
     """Ambil ringkasan data fundamental dari yfinance.
 
@@ -66,12 +79,25 @@ def get_fundamental_data(ticker: str) -> dict:
     except Exception:
         return {}
 
+    # Emiten yang laporan keuangannya dalam USD (mis. AMMN, BRPT) diberi
+    # `bookValue` dalam USD oleh yfinance, sementara harga dalam IDR - hasilnya
+    # priceToBook puluhan ribu. PER aman karena EPS sudah dikonversi ke IDR.
+    # Daripada menampilkan angka salah, PBV & BVPS dikosongkan dan diberi catatan.
+    pbv_valid = _book_value_currency_matches_price(info)
+    data_notes = []
+    if not pbv_valid:
+        data_notes.append(
+            f"Laporan keuangan dalam {info.get('financialCurrency')}; PBV/BVPS "
+            "yfinance tidak valid, isi manual dari laporan keuangan"
+        )
+
     return {
         "ticker": ticker,
         "per": info.get("trailingPE"),
-        "pbv": info.get("priceToBook"),
+        "pbv": info.get("priceToBook") if pbv_valid else None,
         "roe_ttm": info.get("returnOnEquity"),
-        "book_value_per_share": info.get("bookValue"),
+        "book_value_per_share": info.get("bookValue") if pbv_valid else None,
+        "data_notes": data_notes,
         "market_cap": info.get("marketCap"),
         "current_price": info.get("currentPrice"),
         "sector": info.get("sector"),
@@ -112,3 +138,11 @@ def get_idx_official_data(
         "daily_transaction_value": transaction[0] if transaction else None,
         "date": transaction[1] if transaction else "",
     }
+
+
+def get_free_float_pct(stock_code: str) -> float | None:
+    """Free float resmi IDX untuk satu kode emiten (format 'BBCA', bukan 'BBCA.JK').
+
+    Dipakai screening massal sebagai fetcher tahap free float.
+    """
+    return compute_public_float_pct(get_shareholders(stock_code))

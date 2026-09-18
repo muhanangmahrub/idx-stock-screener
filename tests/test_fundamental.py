@@ -91,6 +91,12 @@ class TestIsCheapValuation:
     def test_small_cap_cheap_by_pbv(self):
         assert is_cheap_valuation(per=20, pbv=0.7, is_blue_chip=False) is True
 
+    def test_missing_ratio_cannot_prove_cheap_but_other_side_still_counts(self):
+        assert is_cheap_valuation(per=None, pbv=0.5, is_blue_chip=False) is True
+        assert is_cheap_valuation(per=7, pbv=None, is_blue_chip=False) is True
+        assert is_cheap_valuation(per=None, pbv=2.0, is_blue_chip=False) is False
+        assert is_cheap_valuation(per=None, pbv=None, is_blue_chip=True) is False
+
 
 class TestComputeValuation:
     def test_pbv_base_follows_spec_example(self):

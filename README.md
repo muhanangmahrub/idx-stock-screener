@@ -39,6 +39,6 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Eksekusi & horizon (bagian F) - sebagai status kondisi, bukan label BUY/SELL
 - [x] Checklist kualitatif (dijawab manual, tidak dinilai otomatis)
 - [ ] Detektor pola chart teknikal (menunggu spesifikasi dari buku)
-- [ ] Screening massal universe IDX (filter likuiditas dari Ringkasan Saham)
+- [x] Screening massal universe IDX (corong: likuiditas IDX → blacklist → free float IDX → ROE yfinance → valuasi murah PER/PBV, batas small cap untuk semua)
 - [x] UI Streamlit: Lapis 1, Portofolio, Checklist & Eksekusi tersambung; Lapis 2 baru swing high/low
 - [x] Sumber data resmi IDX (free float & nilai transaksi dari idx.co.id, fallback estimasi yfinance)
