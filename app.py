@@ -24,8 +24,22 @@ from screener.fundamental import (
 )
 from screener.idx_data import get_stock_summary
 from screener.patterns import scan
-from screener.plotting import plot_candlestick
+from screener.plotting import add_break_markers, add_trendline, plot_candlestick
 from screener.portfolio import Position, review_portfolio
+from screener.trend import (
+    CONFIRM_FULL_BREAK,
+    CONFIRM_HALF_WAY,
+    DEFAULT_LOOKBACK_SWINGS,
+    DEFAULT_TOLERANCE,
+    MIN_SWINGS_PER_SIDE,
+    UNDEFINED,
+    UPTREND,
+    VALID_BREAK,
+    build_trendline,
+    check_trendline_break,
+    classify_trend,
+    select_anchor_points,
+)
 from screener.universe import (
     STATUS_PASSED,
     candidates_to_dataframe,
@@ -437,15 +451,18 @@ with tab_massal:
 # --- Lapis 2: Teknikal (chart pattern, Edianto Ong) ---
 with tab_teknikal:
     st.caption(
-        "Deteksi swing high/low sebagai fondasi analisis pola. Detektor pola "
-        "(double top, head & shoulders, dst.) belum diimplementasikan - "
-        "menunggu spesifikasi aturan dari buku pemilik (lihat CLAUDE.md)."
+        "Deteksi swing high/low, lalu klasifikasi tren (uptrend / downtrend / "
+        "sideways) dari urutan puncak & dasar sesuai definisi Edianto Ong. "
+        "Detektor pola (double top, head & shoulders, dst.) belum "
+        "diimplementasikan - menunggu spesifikasi aturan dari buku pemilik. "
+        "Alur medium term: weekly 3y (makro) lalu daily 1y. Hasilnya bahan "
+        "analisis manual, bukan sinyal jual/beli."
     )
 
     with st.container(border=True):
         c = st.columns(4)
         with c[0]:
-            period = st.selectbox("Periode data", ["3mo", "6mo", "1y", "2y", "5y"], index=2)
+            period = st.selectbox("Periode data", ["3mo", "6mo", "1y", "2y", "3y", "5y"], index=2)
         with c[1]:
             interval = st.selectbox("Interval", ["1d", "1wk"], index=0)
         with c[2]:
@@ -463,6 +480,38 @@ with tab_teknikal:
                 if use_prominence
                 else None
             )
+        c = st.columns(2)
+        with c[0]:
+            trend_tolerance_pct = st.number_input(
+                "Toleransi 'hampir sama' (%)",
+                min_value=0.0,
+                max_value=20.0,
+                value=DEFAULT_TOLERANCE * 100,
+                step=0.5,
+                help="Selisih puncak-ke-puncak / dasar-ke-dasar di bawah ini dianggap "
+                "sama (sideways). ASUMSI, bukan angka dari buku - kalibrasi ke contoh chart.",
+            )
+        with c[1]:
+            lookback_swings = st.number_input(
+                "Jumlah puncak & dasar terakhir yang dibandingkan",
+                min_value=MIN_SWINGS_PER_SIDE,
+                max_value=10,
+                value=DEFAULT_LOOKBACK_SWINGS,
+                help="ASUMSI, bukan angka dari buku. Makin besar makin ketat.",
+            )
+        confirmation_options = {
+            "Tembus penuh: puncak/dasar terakhir harus dilewati (100%)": CONFIRM_FULL_BREAK,
+            "Setengah jalan: 50% jarak vertikal ke puncak/dasar terakhir terlampaui": CONFIRM_HALF_WAY,
+        }
+        confirmation_label = st.radio(
+            "Syarat titik acuan trendline 'siap' dipakai",
+            list(confirmation_options),
+            help="Dua mazhab dari buku: dasar A2 (uptrend) baru dipakai menggaris "
+            "up-trendline setelah resistance (puncak terakhir sebelum A2) dilewati "
+            "harga, atau cukup 50% jaraknya. Downtrend cermin dengan support. "
+            "Dicek pakai High/Low, bukan Close. Default 100% adalah ASUMSI.",
+        )
+        confirmation_ratio = confirmation_options[confirmation_label]
 
     if st.button("Ambil & tampilkan chart", type="primary", width="stretch"):
         prices_df = get_price_history(ticker, period=period, interval=interval)
@@ -473,10 +522,136 @@ with tab_teknikal:
             highs_idx, lows_idx = get_extrema(
                 prices_df["Close"], distance=distance, prominence=prominence
             )
+            trend = classify_trend(
+                prices_df["Close"],
+                highs_idx,
+                lows_idx,
+                tol=trend_tolerance_pct / 100,
+                lookback_swings=int(lookback_swings),
+            )
+            anchors = select_anchor_points(
+                trend, prices_df["Low"], prices_df["High"], confirmation_ratio
+            )
+            trendline = build_trendline(
+                trend,
+                prices_df["Low"],
+                prices_df["High"],
+                end_index=len(prices_df) - 1,
+                confirmation_ratio=confirmation_ratio,
+            )
+
             fig = plot_candlestick(
                 prices_df, title=ticker, highs_idx=highs_idx, lows_idx=lows_idx
             )
+            break_check = None
+            if trendline is not None:
+                add_trendline(fig, prices_df, trendline)
+                break_check = check_trendline_break(
+                    trendline, prices_df["Close"], prices_df["Low"], prices_df["High"]
+                )
+                add_break_markers(fig, prices_df, trendline, break_check)
             st.plotly_chart(fig, width="stretch")
+
+            with st.container(border=True):
+                st.markdown(f"**Tren ({interval}, {period}): {trend.trend.upper()}**")
+                st.caption(trend.reason)
+                if trendline is not None:
+                    last_close = float(prices_df["Close"].iloc[-1])
+                    line_now = trendline.value_at(trendline.end_index)
+                    gap_pct = (last_close - line_now) / line_now * 100
+                    st.markdown(
+                        f"**{trendline.kind}** dari {len(trendline.points)} titik "
+                        f"({'Low dasar' if trendline.kind == 'up-trendline' else 'High puncak'}). "
+                        f"Level garis di bar terkini: {format_rupiah(line_now)} · "
+                        f"Close terakhir: {format_rupiah(last_close)} "
+                        f"({gap_pct:+.1f}% dari garis)"
+                    )
+                    dates = prices_df.index
+                    if break_check.status == VALID_BREAK:
+                        st.markdown(
+                            f"**Status garis: VALID BREAK** - Close di luar garis pada "
+                            f"{dates[break_check.valid_break_index].strftime('%Y-%m-%d')}."
+                        )
+                    else:
+                        st.markdown(f"**Status garis: {break_check.status.upper()}**")
+                    if break_check.whipsaw_indices:
+                        whipsaw_dates = ", ".join(
+                            dates[i].strftime("%Y-%m-%d") for i in break_check.whipsaw_indices
+                        )
+                        st.caption(
+                            f"Tembusan intraday saja (Close kembali ke dalam garis) = "
+                            f"false break / whipsaw: {whipsaw_dates}."
+                        )
+                    st.caption(
+                        "Aturan buku: penembusan sah hanya bila harga PENUTUPAN di luar "
+                        "garis; tembusan sementara intraday tidak dihitung. Diperiksa "
+                        "sejak bar setelah titik acuan terakhir. Tetap dinilai manual - "
+                        "screener tidak memberi sinyal jual/beli."
+                    )
+                elif anchors:
+                    st.warning(
+                        "Trendline belum digambar: titik acuan yang sudah 'siap' "
+                        "kurang dari 2. Lihat tabel titik acuan di bawah."
+                    )
+                if anchors:
+                    dates = prices_df.index
+                    anchor_label = "Dasar (Low)" if trend.trend == UPTREND else "Puncak (High)"
+                    level_label = "Resistance" if trend.trend == UPTREND else "Support"
+                    st.markdown(f"**Titik acuan {trendline.kind if trendline else 'trendline'}**")
+                    st.dataframe(
+                        pd.DataFrame(
+                            {
+                                anchor_label: [dates[a.index].strftime("%Y-%m-%d") for a in anchors],
+                                "Harga": [a.price for a in anchors],
+                                # None (bukan teks) untuk titik awal supaya kolom tetap numerik.
+                                f"Level {level_label.lower()} yg harus dilewati": [
+                                    a.threshold for a in anchors
+                                ],
+                                "Status": [
+                                    "siap" if a.confirmed else "belum siap" for a in anchors
+                                ],
+                                "Dilewati pada": [
+                                    dates[a.confirmed_index].strftime("%Y-%m-%d")
+                                    if a.confirmed_index is not None
+                                    else "-"
+                                    for a in anchors
+                                ],
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                if trend.peaks and trend.troughs:
+                    dates = prices_df.index
+                    c = st.columns(2)
+                    c[0].dataframe(
+                        pd.DataFrame(
+                            {
+                                "Puncak": [dates[p.index].strftime("%Y-%m-%d") for p in trend.peaks],
+                                "Harga": [p.price for p in trend.peaks],
+                                "vs sebelumnya": ["-"] + trend.peak_steps,
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    c[1].dataframe(
+                        pd.DataFrame(
+                            {
+                                "Dasar": [dates[t.index].strftime("%Y-%m-%d") for t in trend.troughs],
+                                "Harga": [t.price for t in trend.troughs],
+                                "vs sebelumnya": ["-"] + trend.trough_steps,
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                if trend.trend == UNDEFINED:
+                    st.info(
+                        "Tren tidak masuk salah satu definisi - ini bukan kesalahan, "
+                        "cukup berarti chart ini perlu dilihat manual atau ubah "
+                        "parameter swing/toleransi."
+                    )
 
             patterns_found = scan(prices_df["Close"], highs_idx, lows_idx)
             if patterns_found:

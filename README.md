@@ -38,6 +38,9 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Alokasi portofolio & cash (tab Portofolio)
 - [x] Eksekusi & horizon (bagian F) - sebagai status kondisi, bukan label BUY/SELL
 - [x] Checklist kualitatif (dijawab manual, tidak dinilai otomatis)
+- [x] Klasifikasi tren uptrend/downtrend/sideways dari urutan swing high/low (definisi Edianto Ong)
+- [x] Up-/down-trendline dari Low dasar / High puncak, titik acuan harus 'siap' (resistance/support dilewati, atau 50% jaraknya)
+- [x] Status penembusan trendline: valid break (Close di luar garis) vs false break/whipsaw (intraday saja)
 - [ ] Detektor pola chart teknikal (menunggu spesifikasi dari buku)
 - [x] Screening massal universe IDX (corong: likuiditas IDX → blacklist → free float IDX → ROE yfinance → valuasi murah PER/PBV, batas small cap untuk semua)
 - [x] UI Streamlit: Lapis 1, Portofolio, Checklist & Eksekusi tersambung; Lapis 2 baru swing high/low

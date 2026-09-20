@@ -54,11 +54,13 @@ idx-screener/
 │   ├── __init__.py
 │   ├── data.py               # ambil data (harga & fundamental) via yfinance
 │   ├── extrema.py            # get_extrema() — deteksi swing high/low
+│   ├── trend.py              # classify_trend() — uptrend/downtrend/sideways dari urutan swing
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
 │   └── plotting.py           # fungsi chart plotly
 └── tests/
     ├── test_patterns.py      # unit test tiap detektor pola
+    ├── test_trend.py         # unit test klasifikasi tren (data zigzag sintetis)
     └── test_fundamental.py   # unit test filter fundamental
 ```
 
@@ -164,6 +166,73 @@ Kriteria kualitatif tetap manual, tidak boleh dipaksa jadi filter otomatis: deep
 dive laporan keuangan, market leader/visibilitas merek, model bisnis simpel, GCG &
 profil pemilik, kebiasaan right issue, katalis kebijakan/makro. Screener menampilkan
 ini sebagai checklist untuk dijawab pemilik, bukan menilainya sendiri.
+
+## Spesifikasi metode Edianto Ong (lapis 2)
+
+Aturan berikut diberikan pemilik dari buku Edianto Ong. Sama seperti bagian
+Teguh Hidayat: ini spesifikasi rujukan, jangan mengubah angkanya tanpa
+instruksi. Aturan pola chart/candlestick (definisi, toleransi, konfirmasi)
+BELUM diberikan — tanyakan saat akan mengimplementasikan detektor.
+
+### A. Horizon trader
+
+- Short term: < 3 minggu.
+- Medium term: 3 minggu sampai beberapa bulan.
+- Long term: > 1 tahun.
+
+Pemilik cenderung **medium term**. Default UI dan detektor harus mengikuti
+alur medium term di bawah, bukan short term.
+
+### C. Definisi tren (sudah di trend.py: classify_trend)
+
+- Uptrend: puncak maupun dasar yang terbentuk semakin lama semakin tinggi.
+- Downtrend: puncak dan dasar yang terbentuk semakin lama semakin rendah.
+- Sideways: puncak ke puncak dan dasar ke dasar (hampir) sama.
+- Kombinasi lain (mis. puncak naik, dasar turun) dilaporkan "tidak jelas",
+  tidak dipaksa ke salah satu.
+- ASUMSI yang wajib dikalibrasi (bukan angka buku): toleransi "hampir sama"
+  default 2%, jumlah puncak/dasar terakhir yang dibandingkan default 3.
+
+### B. Alur timeframe untuk medium term (makro → presisi)
+
+1. **Weekly chart, periode 3 tahun** — gambaran makro (tren besar).
+2. **Daily chart, periode 1 tahun** — "dikompres" dari weekly untuk detail.
+3. **Minutes chart** — hanya bila perlu presisi lebih, sebagai konfirmasi
+   akhir (bukan titik awal analisis).
+
+### D. Trendline (sudah di trend.py: select_anchor_points, build_trendline)
+
+- Up-trendline: menghubungkan harga terendah (Low) lembah-lembah pada chart
+  uptrend; level tempat uptrend diuji. Down-trendline: menghubungkan harga
+  tertinggi (High) puncak-puncak pada chart downtrend.
+- Syarat titik acuan "siap": pada uptrend, dasar A2 baru dipakai setelah
+  level puncak terakhir sebelum A2 (resistance) dilewati harga. Sebagian
+  technicalist cukup mensyaratkan 50% jarak vertikal A2 → resistance
+  terlampaui. Downtrend cermin: puncak B2 siap setelah support (dasar
+  terakhir sebelum B2) ditembus, atau 50% jaraknya.
+- Pakai harga keseluruhan: High untuk puncak/resistance, Low untuk
+  dasar/support — bukan Close.
+- ASUMSI (bukan buku): default mazhab 100% (`DEFAULT_CONFIRMATION_RATIO`),
+  bisa diganti 50% di UI; titik acuan pertama = titik awal tren, tidak perlu
+  konfirmasi; bila 3+ titik tidak segaris dipakai regresi kuadrat terkecil.
+
+### E. Penembusan trendline (sudah di trend.py: check_trendline_break)
+
+- Aturan utama: penembusan sah (**valid break**) bila harga **penutupan**
+  berada di luar garis — Close jauh lebih signifikan daripada pergerakan
+  sementara intraday.
+- Tembusan sementara oleh High/Low intraday yang Close-nya kembali ke dalam
+  garis = **false break / whipsaw**, bukan penembusan.
+- ASUMSI (bukan buku): diperiksa sejak bar setelah titik acuan terakhir
+  (garis regresi bisa menyilang titik acuannya sendiri); Close tepat di
+  garis belum dihitung di luar. Status hanya ditampilkan sebagai kondisi,
+  bukan sinyal jual/beli.
+
+Catatan implementasi (dari pengecekan yfinance, bukan dari buku): weekly &
+daily tersedia sejak 2004; intraday dibatasi yfinance (1m: 7 hari, 5m–30m:
+60 hari) dan bar 09:00 sering volume 0 (pre-opening) sehingga harus dibuang
+sebelum deteksi pola. Pemetaan ke `get_price_history(ticker, period,
+interval)`: weekly 3 thn = `("3y", "1wk")`, daily 1 thn = `("1y", "1d")`.
 
 ## Yang harus dihindari
 
