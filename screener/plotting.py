@@ -109,6 +109,16 @@ def add_break_markers(fig: go.Figure, df: pd.DataFrame, trendline, break_check) 
                 name="false break (intraday)",
             )
         )
+    if break_check.gap_back_indices:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index[break_check.gap_back_indices],
+                y=df["Close"].iloc[break_check.gap_back_indices],
+                mode="markers",
+                marker=dict(symbol="diamond-open", color="magenta", size=12),
+                name="break, gap kembali (2nd day gagal)",
+            )
+        )
     if break_check.valid_break_index is not None:
         i = break_check.valid_break_index
         fig.add_trace(
@@ -120,4 +130,57 @@ def add_break_markers(fig: go.Figure, df: pd.DataFrame, trendline, break_check) 
                 name="valid break (Close)",
             )
         )
+    return fig
+
+
+def add_levels(fig: go.Figure, df: pd.DataFrame, levels) -> go.Figure:
+    """Gambar level support/resistance horizontal (hasil `levels.track_level`).
+
+    Tiap level digambar dari bar terbentuknya sampai bar terkini, warnanya
+    mengikuti PERAN SAAT INI (hijau support, merah resistance) karena buku
+    menyatakan peran berbalik setelah ditembus. Valid break ditandai berlian,
+    pullback yang bertahan (harga kembali menguji level yang sudah dilewati)
+    ditandai lingkaran, keduanya di harga level.
+    """
+    for level in levels:
+        color = "green" if level.role == "support" else "red"
+        x = [df.index[level.origin_index], df.index[level.end_index]]
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=[level.price, level.price],
+                mode="lines",
+                line=dict(color=color, width=1, dash="dot"),
+                name=f"{level.role} {level.price:g}",
+                showlegend=False,
+                hovertemplate=(
+                    f"{level.role} {level.price:g}<br>awal: {level.initial_role}"
+                    f"<br>usia: {level.age_bars} bar<extra></extra>"
+                ),
+            )
+        )
+        breaks = level.valid_breaks
+        if breaks:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index[[e.index for e in breaks]],
+                    y=[level.price] * len(breaks),
+                    mode="markers",
+                    marker=dict(symbol="diamond-open", color=color, size=10),
+                    showlegend=False,
+                    hovertemplate="valid break, peran berbalik<extra></extra>",
+                )
+            )
+        pullbacks = level.pullbacks_held
+        if pullbacks:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index[[e.index for e in pullbacks]],
+                    y=[level.price] * len(pullbacks),
+                    mode="markers",
+                    marker=dict(symbol="circle", color=color, size=8),
+                    showlegend=False,
+                    hovertemplate=f"pullback: {level.role} diuji & bertahan<extra></extra>",
+                )
+            )
     return fig

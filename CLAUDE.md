@@ -55,12 +55,14 @@ idx-screener/
 │   ├── data.py               # ambil data (harga & fundamental) via yfinance
 │   ├── extrema.py            # get_extrema() — deteksi swing high/low
 │   ├── trend.py              # classify_trend() — uptrend/downtrend/sideways dari urutan swing
+│   ├── levels.py             # track_level() — support/resistance horizontal, tembus & balik peran
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
 │   └── plotting.py           # fungsi chart plotly
 └── tests/
     ├── test_patterns.py      # unit test tiap detektor pola
     ├── test_trend.py         # unit test klasifikasi tren (data zigzag sintetis)
+    ├── test_levels.py        # unit test tembus & pembalikan peran level S/R
     └── test_fundamental.py   # unit test filter fundamental
 ```
 
@@ -227,6 +229,52 @@ alur medium term di bawah, bukan short term.
   (garis regresi bisa menyilang titik acuannya sendiri); Close tepat di
   garis belum dihitung di luar. Status hanya ditampilkan sebagai kondisi,
   bukan sinyal jual/beli.
+- **Aturan 2nd day:** walaupun trendline sudah valid break, harga
+  **pembukaan sesi berikutnya** menjadi konfirmasi akhir, karena Open bisa
+  loncat kembali (gap) ke dalam garis. Weekly chart: Close Jumat = patokan
+  validasi breakout, Open Senin berikutnya = konfirmasi akhir. Di kode:
+  Open bar berikutnya (bar weekly yfinance Open = Senin, Close = Jumat).
+- ASUMSI 2nd day (bukan buku): Open tepat di garis belum di luar; tembusan
+  yang gap kembali dicatat (`gap_back_indices`) lalu pemindaian lanjut ke
+  tembusan berikutnya; bila bar berikutnya belum ada → "menunggu".
+- PERTANYAAN TERBUKA (keputusan pemilik 2026-09-22: biarkan dulu): apakah
+  2nd day juga berlaku untuk tembusan support/resistance horizontal (bagian
+  F)? Saat ini peran level berbalik langsung saat Close di luar level,
+  tanpa menunggu Open sesi berikutnya.
+
+### F. Support & resistance horizontal (sudah di levels.py: track_level)
+
+- Tembus sah: prinsip yang sama seperti trendline — harga PENUTUPAN di luar
+  level; tembusan intraday saja = false break / whipsaw.
+- Pembalikan peran: support yang ditembus berubah jadi resistance, dan
+  resistance yang ditembus berubah jadi support. Semakin kuat level itu
+  sebelumnya, semakin kuat pula perannya yang baru (kekuatan terbawa).
+- Faktor waktu ikut menentukan kekuatan: support/resistance lima bulan
+  lebih kuat daripada lima hari. Buku tidak memberi skala — jangan mengarang
+  skor "kuat/lemah"; yang ditampilkan hanya usia level (sejak terbentuk,
+  tidak direset saat peran berbalik) untuk dinilai manual.
+- Asal level (aturan buku): garis support ditarik mendatar dari titik
+  terendah pada lembah yang sudah terjadi; garis resistance dari titik
+  tertinggi pada puncak yang sudah terjadi. Di kode: `levels_from_swings`
+  memakai Low di swing low dan High di swing high, `lookback_swings`
+  terakhir tiap sisi.
+- Catatan implementasi (bukan buku): swing dideteksi dari Close, jadi
+  Low/High diambil dari bar swing itu — bar tetangga bisa sedikit lebih
+  ekstrem. Jumlah sentuhan belum dihitung (butuh toleransi yang belum ada
+  di buku).
+
+### G. Pullback (sudah di levels.py: track_level → PULLBACK)
+
+- Pullback: ketika harga kembali menguji suatu level support maupun
+  resistance yang sudah dilewati.
+- Di kode: hanya setelah level pernah ditembus sah. Bar yang menyentuh
+  level lagi dengan Close tetap di dalam = pullback **bertahan**; bila Close
+  menembus lagi = valid break berikutnya = pullback **gagal** (peran
+  berbalik lagi). Tembusan pertama bukan pullback.
+- ASUMSI (bukan buku): "menguji" = menyentuh (Low ≤ support / High ≥
+  resistance). `pullback_tol` default 0; UI bisa melonggarkan ke
+  "mendekati sekian %". Tidak ada penilaian apakah pullback itu peluang
+  masuk — itu analisis manual.
 
 Catatan implementasi (dari pengecekan yfinance, bukan dari buku): weekly &
 daily tersedia sejak 2004; intraday dibatasi yfinance (1m: 7 hari, 5m–30m:

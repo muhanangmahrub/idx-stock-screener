@@ -24,7 +24,8 @@ from screener.fundamental import (
 )
 from screener.idx_data import get_stock_summary
 from screener.patterns import scan
-from screener.plotting import add_break_markers, add_trendline, plot_candlestick
+from screener.levels import levels_from_swings
+from screener.plotting import add_break_markers, add_levels, add_trendline, plot_candlestick
 from screener.portfolio import Position, review_portfolio
 from screener.trend import (
     CONFIRM_FULL_BREAK,
@@ -33,6 +34,7 @@ from screener.trend import (
     DEFAULT_TOLERANCE,
     MIN_SWINGS_PER_SIDE,
     UNDEFINED,
+    SECOND_DAY_CONFIRMED,
     UPTREND,
     VALID_BREAK,
     build_trendline,
@@ -512,6 +514,16 @@ with tab_teknikal:
             "Dicek pakai High/Low, bukan Close. Default 100% adalah ASUMSI.",
         )
         confirmation_ratio = confirmation_options[confirmation_label]
+        pullback_tol_pct = st.number_input(
+            "Toleransi sentuh pullback (%)",
+            min_value=0.0,
+            max_value=5.0,
+            value=0.0,
+            step=0.25,
+            help="Pullback = harga kembali menguji level S/R yang sudah dilewati. "
+            "0% = Low/High harus menyentuh level (ASUMSI default, bukan angka buku); "
+            "lebih besar = 'mendekati' sekian persen sudah dihitung menguji.",
+        )
 
     if st.button("Ambil & tampilkan chart", type="primary", width="stretch"):
         prices_df = get_price_history(ticker, period=period, interval=interval)
@@ -547,9 +559,21 @@ with tab_teknikal:
             if trendline is not None:
                 add_trendline(fig, prices_df, trendline)
                 break_check = check_trendline_break(
-                    trendline, prices_df["Close"], prices_df["Low"], prices_df["High"]
+                    trendline,
+                    prices_df["Close"],
+                    prices_df["Low"],
+                    prices_df["High"],
+                    prices_df["Open"],
                 )
                 add_break_markers(fig, prices_df, trendline, break_check)
+            sr_levels = levels_from_swings(
+                prices_df,
+                highs_idx,
+                lows_idx,
+                per_side=int(lookback_swings),
+                pullback_tol=pullback_tol_pct / 100,
+            )
+            add_levels(fig, prices_df, sr_levels)
             st.plotly_chart(fig, width="stretch")
 
             with st.container(border=True):
@@ -568,12 +592,34 @@ with tab_teknikal:
                     )
                     dates = prices_df.index
                     if break_check.status == VALID_BREAK:
+                        break_date = dates[break_check.valid_break_index].strftime("%Y-%m-%d")
+                        if break_check.second_day == SECOND_DAY_CONFIRMED:
+                            next_open_date = dates[break_check.valid_break_index + 1].strftime(
+                                "%Y-%m-%d"
+                            )
+                            second_day_text = (
+                                f"2nd day: TERKONFIRMASI - Open {next_open_date} tetap di "
+                                "luar garis."
+                            )
+                        else:
+                            second_day_text = (
+                                "2nd day: MENUNGGU Open sesi berikutnya (bisa gap kembali "
+                                "ke dalam garis - konfirmasi akhir belum ada)."
+                            )
                         st.markdown(
                             f"**Status garis: VALID BREAK** - Close di luar garis pada "
-                            f"{dates[break_check.valid_break_index].strftime('%Y-%m-%d')}."
+                            f"{break_date}. {second_day_text}"
                         )
                     else:
                         st.markdown(f"**Status garis: {break_check.status.upper()}**")
+                    if break_check.gap_back_indices:
+                        gap_dates = ", ".join(
+                            dates[i].strftime("%Y-%m-%d") for i in break_check.gap_back_indices
+                        )
+                        st.caption(
+                            f"Close pernah di luar garis tapi Open sesi berikutnya gap "
+                            f"kembali ke dalam (2nd day gagal): {gap_dates}."
+                        )
                     if break_check.whipsaw_indices:
                         whipsaw_dates = ", ".join(
                             dates[i].strftime("%Y-%m-%d") for i in break_check.whipsaw_indices
@@ -584,9 +630,11 @@ with tab_teknikal:
                         )
                     st.caption(
                         "Aturan buku: penembusan sah hanya bila harga PENUTUPAN di luar "
-                        "garis; tembusan sementara intraday tidak dihitung. Diperiksa "
-                        "sejak bar setelah titik acuan terakhir. Tetap dinilai manual - "
-                        "screener tidak memberi sinyal jual/beli."
+                        "garis; tembusan sementara intraday tidak dihitung. Aturan 2nd "
+                        "day: Open sesi berikutnya jadi konfirmasi akhir (weekly: Close "
+                        "Jumat validasi, Open Senin konfirmasi). Diperiksa sejak bar "
+                        "setelah titik acuan terakhir. Tetap dinilai manual - screener "
+                        "tidak memberi sinyal jual/beli."
                     )
                 elif anchors:
                     st.warning(
@@ -651,6 +699,63 @@ with tab_teknikal:
                         "Tren tidak masuk salah satu definisi - ini bukan kesalahan, "
                         "cukup berarti chart ini perlu dilihat manual atau ubah "
                         "parameter swing/toleransi."
+                    )
+
+            if sr_levels:
+                with st.container(border=True):
+                    st.markdown("**Level support & resistance horizontal**")
+                    st.caption(
+                        "Sesuai buku: support = garis mendatar dari titik terendah "
+                        "lembah (Low swing low), resistance = dari titik tertinggi "
+                        f"puncak (High swing high); {int(lookback_swings)} terakhir tiap "
+                        "sisi. Tembus sah hanya bila Close di luar level; setelah "
+                        "tembus, peran berbalik (support jadi resistance, sebaliknya) "
+                        "dengan kekuatan yang sama; level yang lebih lama lebih kuat. "
+                        "Pullback = harga kembali menguji level yang sudah dilewati: "
+                        "'bertahan' bila Close tetap di dalam (lingkaran di chart), "
+                        "'gagal' bila Close menembus lagi. Buku tidak memberi skala "
+                        "kekuatan, jadi hanya usia yang ditampilkan - dinilai manual."
+                    )
+                    dates = prices_df.index
+                    days_per_bar = 7 if interval == "1wk" else 1
+                    st.dataframe(
+                        pd.DataFrame(
+                            {
+                                "Level": [level.price for level in sr_levels],
+                                "Peran awal": [level.initial_role for level in sr_levels],
+                                "Peran sekarang": [level.role for level in sr_levels],
+                                "Terbentuk": [
+                                    dates[level.origin_index].strftime("%Y-%m-%d")
+                                    for level in sr_levels
+                                ],
+                                "Usia (bar)": [level.age_bars for level in sr_levels],
+                                "Usia (~hari)": [
+                                    level.age_bars * days_per_bar for level in sr_levels
+                                ],
+                                "Valid break": [len(level.valid_breaks) for level in sr_levels],
+                                "False break": [len(level.false_breaks) for level in sr_levels],
+                                "Pullback bertahan": [
+                                    len(level.pullbacks_held) for level in sr_levels
+                                ],
+                                "Pullback gagal": [
+                                    len(level.pullbacks_failed) for level in sr_levels
+                                ],
+                                "Pullback terakhir": [
+                                    dates[level.pullbacks_held[-1].index].strftime("%Y-%m-%d")
+                                    if level.pullbacks_held
+                                    else "-"
+                                    for level in sr_levels
+                                ],
+                                "Break terakhir": [
+                                    dates[level.valid_breaks[-1].index].strftime("%Y-%m-%d")
+                                    if level.valid_breaks
+                                    else "-"
+                                    for level in sr_levels
+                                ],
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
                     )
 
             patterns_found = scan(prices_df["Close"], highs_idx, lows_idx)

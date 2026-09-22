@@ -40,7 +40,9 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Checklist kualitatif (dijawab manual, tidak dinilai otomatis)
 - [x] Klasifikasi tren uptrend/downtrend/sideways dari urutan swing high/low (definisi Edianto Ong)
 - [x] Up-/down-trendline dari Low dasar / High puncak, titik acuan harus 'siap' (resistance/support dilewati, atau 50% jaraknya)
-- [x] Status penembusan trendline: valid break (Close di luar garis) vs false break/whipsaw (intraday saja)
+- [x] Status penembusan trendline: valid break (Close di luar garis) vs false break/whipsaw (intraday saja), plus aturan 2nd day (Open sesi berikutnya sebagai konfirmasi akhir)
+- [x] Level support/resistance horizontal: tembus sah via Close, peran berbalik setelah tembus, usia level ditampilkan; level dari Low lembah / High puncak sesuai buku
+- [x] Pullback: uji ulang level yang sudah dilewati, dicatat bertahan (Close di dalam) atau gagal (tembus lagi)
 - [ ] Detektor pola chart teknikal (menunggu spesifikasi dari buku)
 - [x] Screening massal universe IDX (corong: likuiditas IDX → blacklist → free float IDX → ROE yfinance → valuasi murah PER/PBV, batas small cap untuk semua)
 - [x] UI Streamlit: Lapis 1, Portofolio, Checklist & Eksekusi tersambung; Lapis 2 baru swing high/low

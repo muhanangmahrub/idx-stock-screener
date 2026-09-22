@@ -6,6 +6,8 @@ from screener.extrema import get_extrema
 from screener.trend import (
     FALSE_BREAK,
     LINE_INTACT,
+    SECOND_DAY_CONFIRMED,
+    SECOND_DAY_PENDING,
     VALID_BREAK,
     AnchorPoint,
     check_trendline_break,
@@ -365,7 +367,7 @@ class TestCheckTrendlineBreak:
         closes = pd.Series([100, 101, 103, 102, 104, 105, 103, 104, 106, 107], dtype=float)
         lows = closes - 1
         highs = closes + 1
-        result = check_trendline_break(_flat_up_trendline(), closes, lows, highs)
+        result = check_trendline_break(_flat_up_trendline(), closes, lows, highs, closes)
         assert result.status == LINE_INTACT
         assert result.checked_from == 2
         assert result.valid_break_index is None and result.whipsaw_indices == []
@@ -375,7 +377,7 @@ class TestCheckTrendlineBreak:
         lows = closes - 1
         lows.iloc[4] = 98  # Low menembus ke bawah 100, Close 104 tetap di atas
         lows.iloc[7] = 99
-        result = check_trendline_break(_flat_up_trendline(), closes, lows, closes + 1)
+        result = check_trendline_break(_flat_up_trendline(), closes, lows, closes + 1, closes)
         assert result.status == FALSE_BREAK
         assert result.whipsaw_indices == [4, 7]
         assert result.valid_break_index is None
@@ -384,20 +386,20 @@ class TestCheckTrendlineBreak:
         closes = pd.Series([100, 101, 103, 102, 104, 99, 98, 104, 106, 107], dtype=float)
         lows = closes - 1
         lows.iloc[3] = 97  # whipsaw sebelum valid break tetap dicatat
-        result = check_trendline_break(_flat_up_trendline(), closes, lows, closes + 1)
+        result = check_trendline_break(_flat_up_trendline(), closes, lows, closes + 1, closes)
         assert result.status == VALID_BREAK
         assert result.valid_break_index == 5
         assert result.whipsaw_indices == [3]
 
     def test_close_exactly_on_line_is_not_outside(self):
         closes = pd.Series([100, 101, 103, 100, 104, 105, 103, 104, 106, 107], dtype=float)
-        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes)
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, closes)
         assert result.status == LINE_INTACT
 
     def test_bars_up_to_last_anchor_are_not_checked(self):
         # Close di bar 1 (= titik acuan terakhir) di bawah garis: artefak regresi, bukan tembusan.
         closes = pd.Series([100, 95, 103, 102, 104, 105, 103, 104, 106, 107], dtype=float)
-        result = check_trendline_break(_flat_up_trendline(last_anchor=1), closes, closes, closes)
+        result = check_trendline_break(_flat_up_trendline(last_anchor=1), closes, closes, closes, closes)
         assert result.status == LINE_INTACT
 
     def test_down_trendline_mirrors_with_highs_and_close_above(self):
@@ -411,9 +413,11 @@ class TestCheckTrendlineBreak:
         closes = pd.Series([100, 99, 97, 98, 96, 95, 97, 96, 94, 93], dtype=float)
         highs = closes + 1
         highs.iloc[3] = 101  # tembus intraday saja
-        assert check_trendline_break(line, closes, closes - 1, highs).status == FALSE_BREAK
+        assert check_trendline_break(line, closes, closes - 1, highs, closes).status == FALSE_BREAK
         closes.iloc[6] = 102  # Close di atas garis
-        result = check_trendline_break(line, closes, closes - 1, highs)
+        opens = closes.copy()
+        opens.iloc[7] = 101  # Open sesi berikutnya masih di atas garis (2nd day lolos)
+        result = check_trendline_break(line, closes, closes - 1, highs, opens)
         assert result.status == VALID_BREAK
         assert result.valid_break_index == 6
         assert result.whipsaw_indices == [3]
@@ -428,6 +432,79 @@ class TestCheckTrendlineBreak:
             end_index=9,
         )
         closes = pd.Series([100, 102, 102, 105, 106, 107, 108, 109, 107, 111], dtype=float)
-        result = check_trendline_break(line, closes, closes, closes)
+        opens = closes.copy()
+        opens.iloc[9] = 108  # garis di bar 9 = 109; Open 108 masih di bawah -> terkonfirmasi
+        result = check_trendline_break(line, closes, closes, closes, opens)
         assert result.status == VALID_BREAK
         assert result.valid_break_index == 8
+
+
+def _series(values):
+    return pd.Series(values, dtype=float)
+
+
+class TestSecondDayRule:
+    """Aturan 2nd day: valid break dikonfirmasi oleh Open sesi berikutnya;
+    Open yang gap kembali ke dalam garis membatalkan konfirmasi."""
+
+    def test_next_open_outside_confirms_the_break(self):
+        closes = _series([100, 101, 103, 102, 104, 99, 98, 97, 96, 95])
+        opens = closes.copy()
+        opens.iloc[6] = 98.5  # Open sesi setelah break (bar 5) masih di bawah 100
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, opens)
+        assert result.status == VALID_BREAK
+        assert result.valid_break_index == 5
+        assert result.second_day == SECOND_DAY_CONFIRMED
+        assert result.gap_back_indices == []
+
+    def test_next_open_gapping_back_inside_cancels_and_scan_continues(self):
+        # Break di bar 5 (Close 99), tapi Open bar 6 loncat ke 101 -> gap kembali.
+        # Bar 6-9 semuanya di dalam -> tidak ada valid break; status false break.
+        closes = _series([100, 101, 103, 102, 104, 99, 102, 103, 104, 105])
+        opens = closes.copy()
+        opens.iloc[6] = 101
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, opens)
+        assert result.status == FALSE_BREAK
+        assert result.valid_break_index is None
+        assert result.gap_back_indices == [5]
+        assert result.second_day is None
+
+    def test_later_break_after_a_gap_back_is_reported(self):
+        closes = _series([100, 101, 103, 102, 104, 99, 102, 103, 97, 96])
+        opens = closes.copy()
+        opens.iloc[6] = 101  # gap kembali setelah break pertama (bar 5)
+        opens.iloc[9] = 96.5  # break kedua (bar 8) dikonfirmasi Open bar 9
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, opens)
+        assert result.status == VALID_BREAK
+        assert result.valid_break_index == 8
+        assert result.gap_back_indices == [5]
+        assert result.second_day == SECOND_DAY_CONFIRMED
+
+    def test_break_on_last_bar_is_pending_next_session(self):
+        closes = _series([100, 101, 103, 102, 104, 105, 103, 104, 106, 99])
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, closes)
+        assert result.status == VALID_BREAK
+        assert result.valid_break_index == 9
+        assert result.second_day == SECOND_DAY_PENDING
+
+    def test_open_exactly_on_line_is_not_outside_so_it_is_a_gap_back(self):
+        closes = _series([100, 101, 103, 102, 104, 99, 102, 103, 104, 105])
+        opens = closes.copy()
+        opens.iloc[6] = 100
+        result = check_trendline_break(_flat_up_trendline(), closes, closes, closes, opens)
+        assert result.gap_back_indices == [5]
+        assert result.status == FALSE_BREAK
+
+    def test_down_trendline_gap_back_uses_open_below_line(self):
+        line = Trendline(
+            kind=DOWN_TRENDLINE, slope=0.0, intercept=100.0,
+            points=[AnchorPoint(0, 100.0), AnchorPoint(1, 100.0)], end_index=9,
+        )
+        closes = _series([100, 99, 97, 98, 96, 102, 98, 97, 103, 104])
+        opens = closes.copy()
+        opens.iloc[6] = 99  # gap kembali ke bawah garis setelah break bar 5
+        opens.iloc[9] = 103.5  # break bar 8 terkonfirmasi
+        result = check_trendline_break(line, closes, closes, closes, opens)
+        assert result.gap_back_indices == [5]
+        assert result.valid_break_index == 8
+        assert result.second_day == SECOND_DAY_CONFIRMED

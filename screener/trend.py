@@ -51,6 +51,18 @@ ASUMSI (bukan buku): pengecekan dimulai dari bar setelah titik acuan
 terakhir, karena di sekitar titik acuan garis regresi bisa menyilang titik
 acuannya sendiri - itu artefak garis, bukan penembusan. Close tepat di garis
 belum dihitung di luar.
+
+Aturan 2nd day (buku, diberikan 2026-09-22): walaupun trendline sudah
+dinyatakan valid break, harga PEMBUKAAN sesi berikutnya menjadi konfirmasi
+akhir, karena Open bisa loncat kembali (gap) ke dalam garis. Untuk weekly
+chart: Close Jumat = patokan validasi breakout, Open Senin berikutnya =
+konfirmasi akhir. Bar weekly yfinance memang Open = sesi pertama minggu dan
+Close = sesi terakhir, jadi "Open bar berikutnya" berlaku untuk daily maupun
+weekly.
+ASUMSI (bukan buku): Open tepat di garis belum dihitung di luar (konsisten
+dengan Close); tembusan yang Open berikutnya gap kembali dicatat di
+`gap_back_indices` lalu pemindaian dilanjutkan mencari tembusan berikutnya.
+Ini status kondisi untuk analisis manual, bukan sinyal beli.
 """
 
 from dataclasses import dataclass, field
@@ -330,6 +342,10 @@ LINE_INTACT = "belum tembus"
 FALSE_BREAK = "false break"
 VALID_BREAK = "valid break"
 
+# Konfirmasi 2nd day untuk sebuah valid break.
+SECOND_DAY_CONFIRMED = "terkonfirmasi"  # Open sesi berikutnya tetap di luar garis
+SECOND_DAY_PENDING = "menunggu open sesi berikutnya"  # bar berikutnya belum ada
+
 
 @dataclass
 class BreakCheck:
@@ -337,19 +353,30 @@ class BreakCheck:
     checked_from: int  # bar pertama yang diperiksa
     valid_break_index: int | None = None  # bar pertama dengan Close di luar garis
     whipsaw_indices: list[int] = field(default_factory=list)  # tembus intraday saja
+    # Close di luar garis tapi Open sesi berikutnya gap kembali ke dalam.
+    gap_back_indices: list[int] = field(default_factory=list)
+    second_day: str | None = None  # SECOND_DAY_CONFIRMED | SECOND_DAY_PENDING (hanya bila valid break)
 
 
 def check_trendline_break(
-    trendline: Trendline, closes: pd.Series, lows: pd.Series, highs: pd.Series
+    trendline: Trendline,
+    closes: pd.Series,
+    lows: pd.Series,
+    highs: pd.Series,
+    opens: pd.Series,
 ) -> BreakCheck:
     """Periksa bar demi bar apakah trendline sudah ditembus secara sah.
 
     Up-trendline: "di luar" = di bawah garis, jadi valid break bila Close <
     garis; Low < garis tapi Close masih >= garis = whipsaw. Down-trendline
-    cermin dengan High dan Close > garis. Whipsaw hanya dicatat sampai valid
-    break pertama - setelah itu garisnya sudah dianggap tembus.
+    cermin dengan High dan Close > garis. Sebuah valid break lalu diuji
+    aturan 2nd day: Open bar berikutnya harus masih di luar garis; kalau gap
+    kembali ke dalam, tembusan itu dicatat di `gap_back_indices` dan
+    pemindaian lanjut. Whipsaw & gap kembali hanya dicatat sampai valid break
+    yang lolos (atau masih menunggu) 2nd day.
     """
     close_values = closes.to_numpy()
+    open_values = opens.to_numpy()
     start = trendline.points[-1].index + 1
     end = min(trendline.end_index, len(close_values) - 1)
 
@@ -360,12 +387,28 @@ def check_trendline_break(
         return price < line if outside_is_below else price > line
 
     whipsaws: list[int] = []
+    gap_backs: list[int] = []
     for i in range(start, end + 1):
         line = trendline.value_at(i)
         if is_outside(close_values[i], line):
-            return BreakCheck(VALID_BREAK, start, valid_break_index=i, whipsaw_indices=whipsaws)
+            next_bar = i + 1
+            if next_bar > end:
+                second_day = SECOND_DAY_PENDING
+            elif is_outside(open_values[next_bar], trendline.value_at(next_bar)):
+                second_day = SECOND_DAY_CONFIRMED
+            else:
+                gap_backs.append(i)
+                continue
+            return BreakCheck(
+                VALID_BREAK,
+                start,
+                valid_break_index=i,
+                whipsaw_indices=whipsaws,
+                gap_back_indices=gap_backs,
+                second_day=second_day,
+            )
         if is_outside(pierce_values[i], line):
             whipsaws.append(i)
 
-    status = FALSE_BREAK if whipsaws else LINE_INTACT
-    return BreakCheck(status, start, whipsaw_indices=whipsaws)
+    status = FALSE_BREAK if (whipsaws or gap_backs) else LINE_INTACT
+    return BreakCheck(status, start, whipsaw_indices=whipsaws, gap_back_indices=gap_backs)
