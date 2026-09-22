@@ -184,3 +184,85 @@ def add_levels(fig: go.Figure, df: pd.DataFrame, levels) -> go.Figure:
                 )
             )
     return fig
+
+
+def add_breakout_plan(fig: go.Figure, df: pd.DataFrame, signal, plan, position) -> go.Figure:
+    """Tandai satu rencana breakout (hasil `breakout.*`): titik masuk (segitiga),
+    garis cut-loss dari bar masuk sampai bar keluar / terkini, dan titik
+    keluar (silang) bila rencana sudah menghasilkan keluar."""
+    if signal.entry_index is None:
+        return fig
+    end = position.exit_index if position.exit_index is not None else len(df) - 1
+    fig.add_trace(
+        go.Scatter(
+            x=[df.index[signal.entry_index]],
+            y=[signal.entry_price],
+            mode="markers",
+            marker=dict(symbol="triangle-up", color="cyan", size=13),
+            name=f"masuk 2nd day {signal.entry_price:g}",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[df.index[signal.entry_index], df.index[end]],
+            y=[plan.cut_loss, plan.cut_loss],
+            mode="lines",
+            line=dict(color="cyan", width=1, dash="dashdot"),
+            name=f"cut-loss {plan.cut_loss:g}",
+        )
+    )
+    if position.exit_index is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[df.index[position.exit_index]],
+                y=[position.exit_price],
+                mode="markers",
+                marker=dict(symbol="x", color="cyan", size=13),
+                name=f"keluar: {position.status}",
+            )
+        )
+    return fig
+
+
+def add_channel(fig: go.Figure, df: pd.DataFrame, channel) -> go.Figure:
+    """Gambar channel line (proyeksi sejajar basic trendline) + titik acuannya.
+
+    Basic trendline-nya sendiri sudah digambar `add_trendline`; di sini hanya
+    sisi seberang koridor, dengan area di antara keduanya diberi arsiran tipis
+    supaya "saluran"-nya terlihat.
+    """
+    bar_indices = np.arange(channel.basic.start_index, channel.basic.end_index + 1)
+    x = df.index[bar_indices]
+    color = "green" if channel.is_uptrend else "red"
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[channel.basic_value_at(i) for i in bar_indices],
+            mode="lines",
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[channel.channel_value_at(i) for i in bar_indices],
+            mode="lines",
+            line=dict(color=color, width=2, dash="dot"),
+            fill="tonexty",
+            fillcolor="rgba(128,128,128,0.12)",
+            name="channel line",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[df.index[channel.anchor.index]],
+            y=[channel.anchor.price],
+            mode="markers",
+            marker=dict(symbol="square-open", color=color, size=12, line=dict(width=2)),
+            name="titik channel line",
+        )
+    )
+    return fig

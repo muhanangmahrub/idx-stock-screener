@@ -56,6 +56,8 @@ idx-screener/
 │   ├── extrema.py            # get_extrema() — deteksi swing high/low
 │   ├── trend.py              # classify_trend() — uptrend/downtrend/sideways dari urutan swing
 │   ├── levels.py             # track_level() — support/resistance horizontal, tembus & balik peran
+│   ├── breakout.py           # validasi breakout resistance + trading plan (contoh McD)
+│   ├── channel.py            # channeling: basic trendline + channel line sejajar
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
 │   └── plotting.py           # fungsi chart plotly
@@ -63,6 +65,8 @@ idx-screener/
     ├── test_patterns.py      # unit test tiap detektor pola
     ├── test_trend.py         # unit test klasifikasi tren (data zigzag sintetis)
     ├── test_levels.py        # unit test tembus & pembalikan peran level S/R
+    ├── test_breakout.py      # unit test breakout & trading plan vs angka contoh McD
+    ├── test_channel.py       # unit test channel line & arti penembusannya
     └── test_fundamental.py   # unit test filter fundamental
 ```
 
@@ -237,6 +241,15 @@ alur medium term di bawah, bukan short term.
 - ASUMSI 2nd day (bukan buku): Open tepat di garis belum di luar; tembusan
   yang gap kembali dicatat (`gap_back_indices`) lalu pemindaian lanjut ke
   tembusan berikutnya; bila bar berikutnya belum ada → "menunggu".
+- **Batas toleransi penembusan** (buku): untuk meredam whipsaw, Close
+  harus melewati garis ± toleransi sebelum dinyatakan valid break. Lebih
+  lazim pada trendline daripada support/resistance horizontal (yang lebih
+  presisi, bisa ditarik dari satu titik). Panduan: short term 0,5–1,5%,
+  medium term 2–3%, long term 3,5–5%. Contoh buku: trendline daily 125,
+  toleransi 2% → 122,5. Default kode 2% (medium term, horizon pemilik).
+  Konstanta `BREAK_TOLERANCE_*` di trend.py.
+- ASUMSI toleransi (bukan buku): 2nd day memakai batas yang sama (Open
+  harus tetap di luar garis ± toleransi).
 - PERTANYAAN TERBUKA (keputusan pemilik 2026-09-22: biarkan dulu): apakah
   2nd day juga berlaku untuk tembusan support/resistance horizontal (bagian
   F)? Saat ini peran level berbalik langsung saat Close di luar level,
@@ -275,6 +288,58 @@ alur medium term di bawah, bukan short term.
   resistance). `pullback_tol` default 0; UI bisa melonggarkan ke
   "mendekati sekian %". Tidak ada penilaian apakah pullback itu peluang
   masuk — itu analisis manual.
+
+### G2. Channeling (sudah di channel.py: build_channel, check_channel_break)
+
+- Harga kadang bergerak rapi dalam koridor: dua garis **paralel** seperti
+  saluran/terowongan.
+- Uptrend channeling: garis **bawah** = basic trendline, garis **atas** =
+  channel line. Downtrend: garis **atas** = basic trendline, garis **bawah**
+  = channel line.
+- Cara menggambar: tentukan basic trendline dulu, lalu gambar proyeksi
+  **sejajar**-nya di sisi tempat harga bergerak.
+- Arti penembusan (uptrend channeling): basic trendline tertembus =
+  kemungkinan awal perubahan tren (**bearish**); channel line tertembus =
+  akselerasi tren yang sedang berlangsung (**bullish**). Downtrend cermin.
+- ASUMSI (bukan buku): titik acuan channel line = swing sisi seberang yang
+  paling jauh dari basic trendline dalam rentang channel; penembusan
+  memakai aturan Close ± toleransi (bagian E); `touches` (jumlah swing yang
+  menyentuh channel line, toleransi 2%) dilaporkan sebagai ukuran kerapian
+  koridor — buku tidak memberi syarat "cukup rapi untuk disebut
+  channeling". Status ini kondisi untuk dinilai manual, bukan sinyal
+  jual/beli.
+
+### H. Validasi breakout & trading plan (sudah di breakout.py, contoh McD)
+
+Angka buku — jadikan parameter, default sesuai buku, jangan diubah:
+
+1. Breakout sah hanya bila Close melewati resistance + toleransi **1,5%**
+   (`BREAKOUT_TOLERANCE`). Contoh: resistance 50,5 → tembus bila Close >
+   51,25. Menyentuh saja tidak cukup.
+2. Resistance yang diuji **3 kali** = strong resistance
+   (`STRONG_RESISTANCE_MIN_TESTS`); breakout yang menembusnya lebih bermakna.
+3. Jangan masuk di hari breakout — masuk di **Open sesi berikutnya** (2nd
+   day). Open yang gap kembali ke bawah batas membatalkan.
+4. Rencana keluar SEBELUM masuk: resistance lama = support baru, cut-loss
+   **1,5%** di bawahnya (`CUT_LOSS_TOLERANCE`). Contoh: masuk 51,8,
+   cut-loss 49,8, risiko 2/lembar.
+5. Close di bawah cut-loss setelah masuk = false breakout → keluar sesuai
+   rencana.
+6. Tahan selama harga di atas up-trendline; keluar saat trendline patah.
+   Contoh: keluar 58,3, untung 6,5/lembar.
+
+Prinsip keseluruhan: **"Cut your loss fast, let your profit run."**
+Screener menghasilkan sinyal dan rencana untuk ditinjau & dieksekusi manual
+oleh pemilik — bukan robot yang menaruh order. Disclaimer "bukan
+rekomendasi" di UI wajib dipertahankan.
+
+Buku membulatkan angka contoh (51,26→51,25; 49,74→49,8); test memakai
+toleransi pembulatan. ASUMSI (bukan buku): "menguji" = swing high dalam
+1,5% di bawah level tanpa Close melewati batas breakout
+(`DEFAULT_TEST_TOLERANCE`); cut-loss & patah trendline dinilai dari Close
+dengan harga keluar = Close bar itu; toleransi patah trendline = 2%
+(bagian E). Output = simulasi rencana untuk dinilai manual, bukan
+perintah beli/jual.
 
 Catatan implementasi (dari pengecekan yfinance, bukan dari buku): weekly &
 daily tersedia sejak 2004; intraday dibatasi yfinance (1m: 7 hari, 5m–30m:

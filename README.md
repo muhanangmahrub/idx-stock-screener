@@ -43,6 +43,9 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Status penembusan trendline: valid break (Close di luar garis) vs false break/whipsaw (intraday saja), plus aturan 2nd day (Open sesi berikutnya sebagai konfirmasi akhir)
 - [x] Level support/resistance horizontal: tembus sah via Close, peran berbalik setelah tembus, usia level ditampilkan; level dari Low lembah / High puncak sesuai buku
 - [x] Pullback: uji ulang level yang sudah dilewati, dicatat bertahan (Close di dalam) atau gagal (tembus lagi)
+- [x] Toleransi penembusan trendline per horizon (short 0,5-1,5%, medium 2-3%, long 3,5-5%; default 2%)
+- [x] Channeling: channel line sejajar dari basic trendline; basic tertembus = awal perubahan tren, channel line tertembus = akselerasi
+- [x] Validasi breakout & trading plan (Edianto Ong, contoh McD): breakout sah +1,5%, strong resistance (3x uji), masuk 2nd day, cut-loss 1,5% di bawah support baru, false breakout, keluar saat trendline patah
 - [ ] Detektor pola chart teknikal (menunggu spesifikasi dari buku)
 - [x] Screening massal universe IDX (corong: likuiditas IDX → blacklist → free float IDX → ROE yfinance → valuasi murah PER/PBV, batas small cap untuk semua)
 - [x] UI Streamlit: Lapis 1, Portofolio, Checklist & Eksekusi tersambung; Lapis 2 baru swing high/low

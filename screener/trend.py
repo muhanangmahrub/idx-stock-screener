@@ -63,6 +63,20 @@ ASUMSI (bukan buku): Open tepat di garis belum dihitung di luar (konsisten
 dengan Close); tembusan yang Open berikutnya gap kembali dicatat di
 `gap_back_indices` lalu pemindaian dilanjutkan mencari tembusan berikutnya.
 Ini status kondisi untuk analisis manual, bukan sinyal beli.
+
+Batas toleransi penembusan (buku, diberikan 2026-09-22): untuk meredam
+whipsaw, technicalist memberi batas toleransi sebelum pergerakan yang
+melewati garis dinyatakan valid break - lebih lazim pada trendline daripada
+support/resistance horizontal yang lebih presisi. Panduan: makin short term
+makin butuh akurasi. Short term 0,5%-1,5%, medium term 2%-3%, long term
+3,5%-5%. Contoh buku: trendline daily di 125, toleransi 2% -> batas 122,5.
+Di kode: up-trendline tembus bila Close < garis * (1 - tol), down-trendline
+bila Close > garis * (1 + tol). Default 2% = ujung bawah rentang medium
+term (horizon pemilik) dan sama dengan contoh buku.
+ASUMSI (bukan buku): konfirmasi 2nd day memakai batas yang sama (Open harus
+tetap di luar garis +- toleransi), karena batas itulah "garis efektif"
+dalam contoh buku; whipsaw = tembusan (Low/High/Close) yang tidak sampai
+batas toleransi.
 """
 
 from dataclasses import dataclass, field
@@ -342,6 +356,13 @@ LINE_INTACT = "belum tembus"
 FALSE_BREAK = "false break"
 VALID_BREAK = "valid break"
 
+# Rentang toleransi penembusan trendline per horizon (angka buku).
+BREAK_TOLERANCE_SHORT_TERM = (0.005, 0.015)
+BREAK_TOLERANCE_MEDIUM_TERM = (0.02, 0.03)
+BREAK_TOLERANCE_LONG_TERM = (0.035, 0.05)
+# Pemilik medium term -> ujung bawah rentang medium, sama dengan contoh buku.
+DEFAULT_BREAK_TOLERANCE = BREAK_TOLERANCE_MEDIUM_TERM[0]
+
 # Konfirmasi 2nd day untuk sebuah valid break.
 SECOND_DAY_CONFIRMED = "terkonfirmasi"  # Open sesi berikutnya tetap di luar garis
 SECOND_DAY_PENDING = "menunggu open sesi berikutnya"  # bar berikutnya belum ada
@@ -356,6 +377,13 @@ class BreakCheck:
     # Close di luar garis tapi Open sesi berikutnya gap kembali ke dalam.
     gap_back_indices: list[int] = field(default_factory=list)
     second_day: str | None = None  # SECOND_DAY_CONFIRMED | SECOND_DAY_PENDING (hanya bila valid break)
+    tolerance: float = 0.0  # toleransi yang dipakai; batas efektif = garis * (1 -+ tol)
+
+
+def break_threshold(line_value: float, kind: str, tol: float) -> float:
+    """Batas efektif penembusan: garis dikurangi toleransi untuk up-trendline
+    (contoh buku: 125 * (1 - 2%) = 122,5), ditambah untuk down-trendline."""
+    return line_value * (1 - tol) if kind == UP_TRENDLINE else line_value * (1 + tol)
 
 
 def check_trendline_break(
@@ -364,17 +392,21 @@ def check_trendline_break(
     lows: pd.Series,
     highs: pd.Series,
     opens: pd.Series,
+    tol: float = DEFAULT_BREAK_TOLERANCE,
 ) -> BreakCheck:
     """Periksa bar demi bar apakah trendline sudah ditembus secara sah.
 
     Up-trendline: "di luar" = di bawah garis, jadi valid break bila Close <
-    garis; Low < garis tapi Close masih >= garis = whipsaw. Down-trendline
-    cermin dengan High dan Close > garis. Sebuah valid break lalu diuji
-    aturan 2nd day: Open bar berikutnya harus masih di luar garis; kalau gap
-    kembali ke dalam, tembusan itu dicatat di `gap_back_indices` dan
-    pemindaian lanjut. Whipsaw & gap kembali hanya dicatat sampai valid break
-    yang lolos (atau masih menunggu) 2nd day.
+    garis * (1 - tol); Low (atau Close) di bawah garis tapi tidak sampai batas
+    toleransi = whipsaw. Down-trendline cermin dengan High dan Close > garis
+    * (1 + tol). Sebuah valid break lalu diuji aturan 2nd day: Open bar
+    berikutnya harus masih di luar batas; kalau gap kembali ke dalam,
+    tembusan itu dicatat di `gap_back_indices` dan pemindaian lanjut. Whipsaw
+    & gap kembali hanya dicatat sampai valid break yang lolos (atau masih
+    menunggu) 2nd day.
     """
+    if tol < 0:
+        raise ValueError("tol tidak boleh negatif")
     close_values = closes.to_numpy()
     open_values = opens.to_numpy()
     start = trendline.points[-1].index + 1
@@ -383,18 +415,22 @@ def check_trendline_break(
     outside_is_below = trendline.kind == UP_TRENDLINE
     pierce_values = lows.to_numpy() if outside_is_below else highs.to_numpy()
 
-    def is_outside(price: float, line: float) -> bool:
-        return price < line if outside_is_below else price > line
+    def is_outside(price: float, boundary: float) -> bool:
+        return price < boundary if outside_is_below else price > boundary
 
     whipsaws: list[int] = []
     gap_backs: list[int] = []
     for i in range(start, end + 1):
         line = trendline.value_at(i)
-        if is_outside(close_values[i], line):
+        threshold = break_threshold(line, trendline.kind, tol)
+        if is_outside(close_values[i], threshold):
             next_bar = i + 1
             if next_bar > end:
                 second_day = SECOND_DAY_PENDING
-            elif is_outside(open_values[next_bar], trendline.value_at(next_bar)):
+            elif is_outside(
+                open_values[next_bar],
+                break_threshold(trendline.value_at(next_bar), trendline.kind, tol),
+            ):
                 second_day = SECOND_DAY_CONFIRMED
             else:
                 gap_backs.append(i)
@@ -406,9 +442,12 @@ def check_trendline_break(
                 whipsaw_indices=whipsaws,
                 gap_back_indices=gap_backs,
                 second_day=second_day,
+                tolerance=tol,
             )
         if is_outside(pierce_values[i], line):
             whipsaws.append(i)
 
     status = FALSE_BREAK if (whipsaws or gap_backs) else LINE_INTACT
-    return BreakCheck(status, start, whipsaw_indices=whipsaws, gap_back_indices=gap_backs)
+    return BreakCheck(
+        status, start, whipsaw_indices=whipsaws, gap_back_indices=gap_backs, tolerance=tol
+    )

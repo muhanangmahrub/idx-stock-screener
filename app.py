@@ -24,12 +24,36 @@ from screener.fundamental import (
 )
 from screener.idx_data import get_stock_summary
 from screener.patterns import scan
-from screener.levels import levels_from_swings
-from screener.plotting import add_break_markers, add_levels, add_trendline, plot_candlestick
+from screener.channel import (
+    CHANNEL_INTACT,
+    build_channel,
+    check_channel_break,
+)
+from screener.breakout import (
+    BREAKOUT_TOLERANCE,
+    CUT_LOSS_TOLERANCE,
+    DEFAULT_TEST_TOLERANCE,
+    STRONG_RESISTANCE_MIN_TESTS,
+    build_trading_plan,
+    count_resistance_tests,
+    evaluate_breakout_position,
+    find_breakout,
+    is_strong_resistance,
+)
+from screener.levels import RESISTANCE, levels_from_swings
+from screener.plotting import (
+    add_break_markers,
+    add_breakout_plan,
+    add_channel,
+    add_levels,
+    add_trendline,
+    plot_candlestick,
+)
 from screener.portfolio import Position, review_portfolio
 from screener.trend import (
     CONFIRM_FULL_BREAK,
     CONFIRM_HALF_WAY,
+    DEFAULT_BREAK_TOLERANCE,
     DEFAULT_LOOKBACK_SWINGS,
     DEFAULT_TOLERANCE,
     MIN_SWINGS_PER_SIDE,
@@ -37,6 +61,7 @@ from screener.trend import (
     SECOND_DAY_CONFIRMED,
     UPTREND,
     VALID_BREAK,
+    break_threshold,
     build_trendline,
     check_trendline_break,
     classify_trend,
@@ -514,6 +539,40 @@ with tab_teknikal:
             "Dicek pakai High/Low, bukan Close. Default 100% adalah ASUMSI.",
         )
         confirmation_ratio = confirmation_options[confirmation_label]
+        break_tol_pct = st.number_input(
+            "Toleransi penembusan trendline (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=DEFAULT_BREAK_TOLERANCE * 100,
+            step=0.5,
+            help="Buku: valid break butuh Close melewati garis +- toleransi ini "
+            "(meredam whipsaw). Panduan buku: short term 0,5-1,5%, medium term 2-3%, "
+            "long term 3,5-5%. Default 2% = medium term. Contoh buku: garis 125, "
+            "toleransi 2% -> batas 122,5.",
+        )
+        c = st.columns(3)
+        with c[0]:
+            breakout_tol_pct = st.number_input(
+                "Toleransi breakout resistance (%)",
+                min_value=0.0, max_value=5.0, value=BREAKOUT_TOLERANCE * 100, step=0.25,
+                help="Buku: breakout sah bila Close melewati resistance + 1,5% "
+                "(contoh: 50,5 -> 51,25). Menyentuh saja tidak cukup.",
+            )
+        with c[1]:
+            cut_loss_tol_pct = st.number_input(
+                "Cut-loss di bawah support baru (%)",
+                min_value=0.0, max_value=5.0, value=CUT_LOSS_TOLERANCE * 100, step=0.25,
+                help="Buku: resistance lama jadi support baru, cut-loss 1,5% di bawahnya "
+                "(contoh: 50,5 -> 49,8).",
+            )
+        with c[2]:
+            min_tests = st.number_input(
+                "Uji minimal utk strong resistance",
+                min_value=2, max_value=10, value=STRONG_RESISTANCE_MIN_TESTS,
+                help="Buku: resistance yang sudah diuji 3 kali = strong resistance. "
+                f"Swing high dalam {DEFAULT_TEST_TOLERANCE:.1%} di bawah level dihitung "
+                "'menguji' (ASUMSI, bukan angka buku).",
+            )
         pullback_tol_pct = st.number_input(
             "Toleransi sentuh pullback (%)",
             min_value=0.0,
@@ -556,6 +615,7 @@ with tab_teknikal:
                 prices_df, title=ticker, highs_idx=highs_idx, lows_idx=lows_idx
             )
             break_check = None
+            channel = channel_break = None
             if trendline is not None:
                 add_trendline(fig, prices_df, trendline)
                 break_check = check_trendline_break(
@@ -564,8 +624,17 @@ with tab_teknikal:
                     prices_df["Low"],
                     prices_df["High"],
                     prices_df["Open"],
+                    tol=break_tol_pct / 100,
                 )
                 add_break_markers(fig, prices_df, trendline, break_check)
+                channel = build_channel(
+                    trendline, prices_df["High"], prices_df["Low"], highs_idx, lows_idx
+                )
+                if channel is not None:
+                    add_channel(fig, prices_df, channel)
+                    channel_break = check_channel_break(
+                        channel, prices_df["Close"], tol=break_tol_pct / 100
+                    )
             sr_levels = levels_from_swings(
                 prices_df,
                 highs_idx,
@@ -574,19 +643,75 @@ with tab_teknikal:
                 pullback_tol=pullback_tol_pct / 100,
             )
             add_levels(fig, prices_df, sr_levels)
+
+            # Validasi breakout per resistance: uji berulang, breakout sah,
+            # 2nd day, rencana keluar, status posisi. Hanya up-trendline yang
+            # dipakai sebagai patokan "tahan selama tren naik".
+            exit_trendline = trendline if trendline is not None and trend.trend == UPTREND else None
+            breakout_rows = []
+            for level in sr_levels:
+                if level.initial_role != RESISTANCE:
+                    continue
+                signal = find_breakout(
+                    level.price,
+                    prices_df["Close"],
+                    prices_df["Open"],
+                    start_index=level.origin_index + 1,
+                    tol=breakout_tol_pct / 100,
+                )
+                tests = count_resistance_tests(
+                    level.price,
+                    highs_idx,
+                    prices_df["High"],
+                    prices_df["Close"],
+                    until_index=signal.breakout_index if signal else None,
+                    breakout_tol=breakout_tol_pct / 100,
+                )
+                plan = position = None
+                if signal is not None and signal.entry_index is not None:
+                    plan = build_trading_plan(
+                        level.price, signal.entry_price, cut_loss_tol=cut_loss_tol_pct / 100
+                    )
+                    position = evaluate_breakout_position(
+                        plan,
+                        signal.entry_index,
+                        prices_df["Close"],
+                        trendline=exit_trendline,
+                        trendline_tol=break_tol_pct / 100,
+                    )
+                breakout_rows.append((level, tests, signal, plan, position))
+
+            # Resistance yang berdekatan sering memicu rencana yang sama; supaya
+            # chart tidak penuh, gambar hanya rencana dengan tanggal masuk terbaru.
+            plans_with_entry = [r for r in breakout_rows if r[3] is not None]
+            if plans_with_entry:
+                _, _, signal, plan, position = max(
+                    plans_with_entry, key=lambda r: r[2].entry_index
+                )
+                add_breakout_plan(fig, prices_df, signal, plan, position)
+
             st.plotly_chart(fig, width="stretch")
 
-            with st.container(border=True):
-                st.markdown(f"**Tren ({interval}, {period}): {trend.trend.upper()}**")
+            # Hasil ditaruh di expander supaya halaman bisa dilipat per bagian;
+            # judulnya memuat ringkasan agar tetap informatif saat dilipat.
+            trend_title = f"Tren ({interval}, {period}): {trend.trend.upper()}"
+            if trendline is not None:
+                trend_title += f" · {trendline.kind} · {break_check.status}"
+            with st.expander(trend_title, expanded=True):
                 st.caption(trend.reason)
                 if trendline is not None:
                     last_close = float(prices_df["Close"].iloc[-1])
                     line_now = trendline.value_at(trendline.end_index)
+                    threshold_now = break_threshold(
+                        line_now, trendline.kind, break_tol_pct / 100
+                    )
                     gap_pct = (last_close - line_now) / line_now * 100
                     st.markdown(
                         f"**{trendline.kind}** dari {len(trendline.points)} titik "
                         f"({'Low dasar' if trendline.kind == 'up-trendline' else 'High puncak'}). "
                         f"Level garis di bar terkini: {format_rupiah(line_now)} · "
+                        f"batas valid break (toleransi {break_tol_pct:g}%): "
+                        f"{format_rupiah(threshold_now)} · "
                         f"Close terakhir: {format_rupiah(last_close)} "
                         f"({gap_pct:+.1f}% dari garis)"
                     )
@@ -628,6 +753,28 @@ with tab_teknikal:
                             f"Tembusan intraday saja (Close kembali ke dalam garis) = "
                             f"false break / whipsaw: {whipsaw_dates}."
                         )
+                    if channel is not None:
+                        width_now = channel.width_at(channel.basic.end_index)
+                        width_pct = width_now / channel.basic_value_at(channel.basic.end_index)
+                        st.markdown(
+                            f"**Channeling:** basic trendline di {channel.basic_position}, "
+                            f"channel line sejajar lewat swing "
+                            f"{dates[channel.anchor.index].strftime('%Y-%m-%d')} "
+                            f"({format_rupiah(channel.anchor.price)}); lebar koridor "
+                            f"{format_rupiah(width_now)} ({width_pct:.1%}), "
+                            f"{channel.touches} swing menyentuh channel line."
+                        )
+                        if channel_break.status == CHANNEL_INTACT:
+                            st.caption(f"{channel_break.status} (belum ada Close di luar koridor).")
+                        else:
+                            st.caption(
+                                f"{channel_break.status} - kecenderungan {channel_break.bias} "
+                                f"pada {dates[channel_break.index].strftime('%Y-%m-%d')} "
+                                f"(Close {format_rupiah(channel_break.price)}). Buku: pada "
+                                "uptrend channeling, basic trendline tertembus menandakan "
+                                "kemungkinan awal perubahan tren; channel line tertembus "
+                                "menandakan akselerasi tren. Dinilai manual."
+                            )
                     st.caption(
                         "Aturan buku: penembusan sah hanya bila harga PENUTUPAN di luar "
                         "garis; tembusan sementara intraday tidak dihitung. Aturan 2nd "
@@ -702,8 +849,12 @@ with tab_teknikal:
                     )
 
             if sr_levels:
-                with st.container(border=True):
-                    st.markdown("**Level support & resistance horizontal**")
+                n_support = sum(level.role == "support" for level in sr_levels)
+                with st.expander(
+                    f"Level support & resistance horizontal ({len(sr_levels)} level: "
+                    f"{n_support} support, {len(sr_levels) - n_support} resistance)",
+                    expanded=False,
+                ):
                     st.caption(
                         "Sesuai buku: support = garis mendatar dari titik terendah "
                         "lembah (Low swing low), resistance = dari titik tertinggi "
@@ -757,6 +908,48 @@ with tab_teknikal:
                         width="stretch",
                         hide_index=True,
                     )
+
+            if breakout_rows:
+                n_breakout = sum(r[2] is not None for r in breakout_rows)
+                n_strong = sum(is_strong_resistance(r[1], int(min_tests)) for r in breakout_rows)
+                with st.expander(
+                    f"Validasi breakout & rencana keluar ({len(breakout_rows)} resistance, "
+                    f"{n_strong} strong, {n_breakout} breakout sah)",
+                    expanded=True,
+                ):
+                    st.caption(
+                        f"Aturan buku: breakout sah bila Close > resistance + {breakout_tol_pct:g}% "
+                        "(menyentuh saja tidak cukup); resistance yang diuji "
+                        f">= {int(min_tests)} kali = strong resistance; masuk di Open sesi "
+                        "berikutnya (2nd day); rencana keluar disiapkan sebelum masuk: "
+                        f"cut-loss {cut_loss_tol_pct:g}% di bawah support baru (resistance lama). "
+                        "Close di bawah cut-loss = false breakout -> keluar sesuai rencana; "
+                        "selama di atas up-trendline tahan, keluar saat trendline patah. "
+                        "Prinsip: cut your loss fast, let your profit run. Ini simulasi "
+                        "rencana untuk Anda tinjau dan eksekusi manual - bukan rekomendasi, "
+                        "bukan robot yang menaruh order."
+                    )
+                    dates = prices_df.index
+                    rows = []
+                    for level, tests, signal, plan, position in breakout_rows:
+                        rows.append(
+                            {
+                                "Resistance": level.price,
+                                "Terbentuk": dates[level.origin_index].strftime("%Y-%m-%d"),
+                                "Diuji (x)": tests,
+                                "Strong": "ya" if is_strong_resistance(tests, int(min_tests)) else "-",
+                                "Batas breakout": signal.threshold if signal else level.price * (1 + breakout_tol_pct / 100),
+                                "Breakout": dates[signal.breakout_index].strftime("%Y-%m-%d") if signal else "-",
+                                "2nd day": signal.second_day if signal else "-",
+                                "Masuk (Open)": signal.entry_price if signal and signal.entry_price else None,
+                                "Cut-loss": plan.cut_loss if plan else None,
+                                "Risiko/lembar": plan.risk_per_share if plan else None,
+                                "Status": position.status if position else "-",
+                                "Keluar": dates[position.exit_index].strftime("%Y-%m-%d") if position and position.exit_index is not None else "-",
+                                "P/L per lembar": position.pnl_per_share if position else None,
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
             patterns_found = scan(prices_df["Close"], highs_idx, lows_idx)
             if patterns_found:
