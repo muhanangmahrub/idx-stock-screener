@@ -13,7 +13,7 @@ dengan bentuk seragam:
 Detektor baru didaftarkan di DETECTORS, dan scan() tidak perlu diubah.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd

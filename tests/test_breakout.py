@@ -27,7 +27,7 @@ from screener.breakout import (
     find_breakout,
     is_strong_resistance,
 )
-from screener.trend import UP_TRENDLINE, DOWN_TRENDLINE, AnchorPoint, Trendline
+from screener.trend import DOWN_TRENDLINE, UP_TRENDLINE, AnchorPoint, Trendline
 
 MCD_RESISTANCE = 50.5
 BOOK_ROUNDING = 0.06  # buku membulatkan 51,26 -> 51,25 dan 49,74 -> 49,8

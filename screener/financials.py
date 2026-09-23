@@ -79,6 +79,27 @@ class Ratios:
         return None if self.roe is None else self.roe * 100
 
 
+TRAILING_QUARTERS = 4  # jumlah kuartal untuk laba TTM
+
+
+def sum_trailing_quarters(
+    quarterly_values: list[float | None], quarters: int = TRAILING_QUARTERS
+) -> float | None:
+    """Jumlahkan laba `quarters` kuartal terakhir (TTM), urut dari terbaru.
+
+    Dipakai sebagai dasar rasio laba, bukan satu kuartal dikali empat: laporan
+    kuartalan sangat musiman, sehingga satu kuartal x4 membuat ROE (dan lewat
+    `pbv_base = ROE/10`, harga wajar) melompat-lompat tiap rilis laporan.
+
+    None bila kuartal yang tersedia kurang dari `quarters` - lebih baik kosong
+    daripada TTM setengah jadi yang tampak seperti angka penuh.
+    """
+    available = [v for v in quarterly_values if v is not None]
+    if len(available) < quarters:
+        return None
+    return float(sum(available[:quarters]))
+
+
 def annualization_factor(period: str) -> float:
     """Faktor penyetahunan laba sesuai periode laporan keuangan."""
     try:

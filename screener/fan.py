@@ -65,8 +65,9 @@ FAN_BULLISH = "bullish"  # tren turun menguat -> kemungkinan berbalik naik
 FAN_FORMING = "kipas terbentuk sebagian"
 FAN_CONFIRMED = "reversal terkonfirmasi (garis ketiga tertembus)"
 
-ROLE_RESISTANCE = "resistance"
-ROLE_SUPPORT = "support"
+# Peran garis yang sudah tertembus memakai istilah yang sama dengan level S/R.
+from screener.levels import RESISTANCE as ROLE_RESISTANCE  # noqa: E402
+from screener.levels import SUPPORT as ROLE_SUPPORT  # noqa: E402
 
 FAN_LINE_COUNT = 3  # aturan buku: konfirmasi pada garis ketiga
 DEFAULT_TOUCH_TOLERANCE = 0.02  # ASUMSI (bukan buku): batas "menyentuh" saat retest

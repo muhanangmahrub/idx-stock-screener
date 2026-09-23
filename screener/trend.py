@@ -199,7 +199,7 @@ def select_anchor_points(
     anchor_values = anchor_source.to_numpy()
     break_values = break_source.to_numpy()
     anchors: list[AnchorPoint] = []
-    for previous, current in zip([None] + swings[:-1], swings):
+    for previous, current in zip([None] + swings[:-1], swings, strict=True):
         price = float(anchor_values[current.index])
         if previous is None:
             # Titik awal tren: tidak ada level sebelumnya yang harus dilewati.
@@ -277,7 +277,7 @@ def classify_steps(values: list[float], tol: float) -> list[str]:
     supaya batas naik/sama/turun konsisten.
     """
     steps = []
-    for previous, current in zip(values, values[1:]):
+    for previous, current in zip(values, values[1:], strict=False):
         change = (current - previous) / previous
         if change > tol:
             steps.append(STEP_UP)

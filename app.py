@@ -3,27 +3,39 @@
 import pandas as pd
 import streamlit as st
 
+from screener.analysis import DEFAULT_LEVELS_PER_SIDE, analyze_chart
+from screener.breakout import (
+    BREAKOUT_TOLERANCE,
+    CUT_LOSS_TOLERANCE,
+    DEFAULT_TEST_TOLERANCE,
+    STRONG_RESISTANCE_MIN_TESTS,
+    is_strong_resistance,
+)
+from screener.channel import (
+    CHANNEL_INTACT,
+)
 from screener.checklist import ANSWER_OPTIONS, QUALITATIVE_CHECKLIST, summarize_checklist
 from screener.data import (
     get_free_float_pct,
     get_fundamental_data,
     get_idx_official_data,
     get_price_history,
+    is_last_bar_provisional,
 )
 from screener.execution import evaluate_position
-from screener.extrema import get_extrema
-from screener.formatting import format_rupiah, format_rupiah_compact
+from screener.fan import (
+    FAN_BEARISH,
+    FAN_LINE_COUNT,
+)
 from screener.financials import (
     ANNUALIZATION_FACTORS,
-    PERIOD_FULL_YEAR,
-    PERIOD_HALF_YEAR,
     PERIOD_Q1,
-    PERIOD_Q3,
     absolute_rejects,
     assess_balance_quality,
     assess_growth_quality,
     compute_ratios,
 )
+from screener.formatting import format_rupiah, format_rupiah_compact
 from screener.fundamental import (
     DEFAULT_MARGIN_OF_SAFETY,
     MAX_MARGIN_OF_SAFETY,
@@ -34,30 +46,8 @@ from screener.fundamental import (
     passes_initial_screening,
 )
 from screener.idx_data import get_stock_summary
+from screener.levels import SUPPORT
 from screener.patterns import scan
-from screener.fan import (
-    FAN_BEARISH,
-    FAN_BULLISH,
-    FAN_LINE_COUNT,
-    detect_fan,
-)
-from screener.channel import (
-    CHANNEL_INTACT,
-    build_channel,
-    check_channel_break,
-)
-from screener.breakout import (
-    BREAKOUT_TOLERANCE,
-    CUT_LOSS_TOLERANCE,
-    DEFAULT_TEST_TOLERANCE,
-    STRONG_RESISTANCE_MIN_TESTS,
-    build_trading_plan,
-    count_resistance_tests,
-    evaluate_breakout_position,
-    find_breakout,
-    is_strong_resistance,
-)
-from screener.levels import RESISTANCE, levels_from_swings
 from screener.plotting import (
     add_break_markers,
     add_breakout_plan,
@@ -68,22 +58,30 @@ from screener.plotting import (
     plot_candlestick,
 )
 from screener.portfolio import Position, review_portfolio
+from screener.storage import (
+    DEFAULT_STORE_PATH,
+    KEY_BLACKLIST,
+    KEY_BLUE_CHIPS,
+    KEY_CHECKLIST,
+    KEY_PORTFOLIO,
+    codes_to_text,
+    load_codes,
+    load_value,
+    save_codes,
+    save_value,
+)
 from screener.trend import (
     CONFIRM_FULL_BREAK,
-    DOWNTREND,
     CONFIRM_HALF_WAY,
     DEFAULT_BREAK_TOLERANCE,
     DEFAULT_LOOKBACK_SWINGS,
     DEFAULT_TOLERANCE,
     MIN_SWINGS_PER_SIDE,
-    UNDEFINED,
     SECOND_DAY_CONFIRMED,
+    UNDEFINED,
     UPTREND,
     VALID_BREAK,
     break_threshold,
-    build_trendline,
-    check_trendline_break,
-    classify_trend,
     select_anchor_points,
 )
 from screener.universe import (
@@ -239,7 +237,17 @@ with tab_fundamental:
             m[0].metric("Harga", format_rupiah(fetched.get("current_price") or 0))
             m[1].metric("BVPS", format_rupiah(fetched.get("book_value_per_share") or 0))
             big_rupiah_metric(m[2], "Market cap", fetched.get("market_cap") or 0)
-            m[3].metric("ROE TTM", f"{(fetched.get('roe_ttm') or 0) * 100:.1f}%")
+            # Satu ROE saja supaya tidak ada dua angka berbeda di layar: yang
+            # dipakai screener adalah hitungan sendiri dari laba TTM.
+            roe_used = fetched.get("roe_annualized_pct")
+            roe_yfinance = (fetched.get("roe_ttm") or 0) * 100
+            m[3].metric(
+                "ROE (TTM, hitungan screener)",
+                "—" if roe_used is None else f"{roe_used:.1f}%",
+                help="Laba bersih 4 kuartal terakhir / ekuitas terakhir. Pembanding "
+                f"dari yfinance: {roe_yfinance:.1f}%. Selisih wajar bila yfinance "
+                "memakai ekuitas rata-rata atau periode yang sedikit berbeda.",
+            )
             free_float_source = "IDX" if idx_official.get("free_float_pct") is not None else "yfinance"
             free_float_value = idx_official.get("free_float_pct") or fetched.get("free_float_pct") or 0
             m[4].metric(f"Free float ({free_float_source})", f"{free_float_value:.1f}%")
@@ -452,8 +460,9 @@ with tab_fundamental:
             roe_annualized_pct = ratio_input(
                 "ROE disetahunkan (%)",
                 key="in_roe_annualized_pct",
-                help="Laba bersih kuartal terakhir x 4 / ekuitas terakhir. Cara "
-                "anualisasi ini asumsi — bandingkan dengan ROE TTM.",
+                help="Terisi otomatis dari laba 4 kuartal terakhir (TTM) / ekuitas. "
+                "Untuk angka kumulatif YTD dari laporan keuangan, pakai bagian "
+                "Analisis Laporan Keuangan yang menerapkan faktor buku (Q1 ×4, 1H ×2).",
             )
         is_blacklisted = st.checkbox("Masuk blacklist manual (saham bandar/gorengan)")
 
@@ -571,6 +580,8 @@ with tab_fundamental:
 
         with st.container(border=True):
             st.markdown("**Harga Wajar & Best Buy (Jalur Harga Absolut)**")
+            for warning in valuation.warnings:
+                st.warning(warning)
             if valuation is None:
                 st.info("Isi BVPS untuk menghitung harga wajar.")
             else:
@@ -618,14 +629,33 @@ with tab_massal:
     )
 
     with st.container(border=True):
-        c = st.columns([2, 1])
+        c = st.columns(2)
         with c[0]:
             blacklist_text = st.text_input(
                 "Blacklist manual (kode dipisah koma)",
+                value=codes_to_text(load_codes(KEY_BLACKLIST)),
                 placeholder="mis. ABCD, EFGH",
-                help="Saham bandar/gorengan menurut penilaianmu; tidak dideteksi otomatis.",
+                help="Saham bandar/gorengan menurut penilaianmu; tidak dideteksi "
+                "otomatis. Tersimpan untuk sesi berikutnya.",
             )
         with c[1]:
+            blue_chip_text = st.text_input(
+                "Daftar blue chip (kode dipisah koma)",
+                value=codes_to_text(load_codes(KEY_BLUE_CHIPS)),
+                placeholder="mis. BBCA, BBRI, TLKM",
+                help="Emiten dalam daftar ini dinilai dengan batas PER ≤ 12; sisanya "
+                "memakai batas small cap PER ≤ 8. Ditentukan manual karena buku tidak "
+                "memberi ambang market cap. Tersimpan untuk sesi berikutnya.",
+            )
+        blacklist = {
+            code.strip().upper() for code in blacklist_text.split(",") if code.strip()
+        }
+        blue_chips = {
+            code.strip().upper() for code in blue_chip_text.split(",") if code.strip()
+        }
+
+        c = st.columns([1, 2])
+        with c[0]:
             max_candidates = st.number_input(
                 "Batasi jumlah emiten (0 = semua)",
                 min_value=0,
@@ -633,9 +663,11 @@ with tab_massal:
                 help="Urut dari nilai transaksi terbesar. Berguna untuk uji coba "
                 "cepat sebelum menjalankan ke ratusan emiten.",
             )
-        blacklist = {
-            code.strip().upper() for code in blacklist_text.split(",") if code.strip()
-        }
+        with c[1]:
+            st.caption(
+                f"Tersimpan di `{DEFAULT_STORE_PATH.name}`: {len(blacklist)} kode "
+                f"blacklist, {len(blue_chips)} kode blue chip."
+            )
 
     if st.button("Jalankan screening massal", type="primary", width="stretch"):
         with st.spinner("Mengambil Ringkasan Saham IDX..."):
@@ -653,11 +685,16 @@ with tab_massal:
             def show_progress(done: int, total: int, code: str) -> None:
                 progress_bar.progress(done / total, text=f"{done}/{total} · {code}")
 
+            # Isian disimpan saat dipakai, bukan lewat tombol terpisah.
+            save_codes(KEY_BLACKLIST, blacklist)
+            save_codes(KEY_BLUE_CHIPS, blue_chips)
+
             screened = screen_universe(
                 liquid,
                 fetch_free_float=load_free_float_pct,
                 fetch_fundamental=load_fundamental_data,
                 blacklist=blacklist,
+                blue_chips=blue_chips,
                 on_progress=show_progress,
             )
             progress_bar.empty()
@@ -732,7 +769,10 @@ with tab_massal:
                 )
                 st.caption(
                     "Median dipakai sebagai pembanding utama karena satu emiten "
-                    "dengan PER ekstrem bisa menarik rata-rata sektor terlalu jauh."
+                    "dengan PER ekstrem bisa menarik rata-rata sektor terlalu jauh. "
+                    "Perhatikan: median ini dihitung dari emiten yang ikut diproses "
+                    "screening ini saja (sudah tersaring likuiditas & blacklist), "
+                    "bukan dari seluruh emiten sektor tersebut."
                 )
             else:
                 st.info(
@@ -843,6 +883,15 @@ with tab_teknikal:
                 f"Swing high dalam {DEFAULT_TEST_TOLERANCE:.1%} di bawah level dihitung "
                 "'menguji' (ASUMSI, bukan angka buku).",
             )
+        levels_per_side = st.number_input(
+            "Jumlah level support & resistance",
+            min_value=1,
+            max_value=20,
+            value=DEFAULT_LEVELS_PER_SIDE,
+            help="Berapa swing terakhir tiap sisi yang dijadikan level S/R. "
+            "Terpisah dari lookback tren karena buku menyatakan level yang lebih "
+            "lama lebih kuat — makin besar, makin jauh level lama ikut terlihat.",
+        )
         pullback_tol_pct = st.number_input(
             "Toleransi sentuh pullback (%)",
             min_value=0.0,
@@ -860,126 +909,66 @@ with tab_teknikal:
         if prices_df.empty:
             st.error(f"Data harga untuk {ticker} tidak ditemukan.")
         else:
-            highs_idx, lows_idx = get_extrema(
-                prices_df["Close"], distance=distance, prominence=prominence
-            )
-            trend = classify_trend(
-                prices_df["Close"],
-                highs_idx,
-                lows_idx,
-                tol=trend_tolerance_pct / 100,
+            # Seluruh analisis dijalankan satu pintu di screener/analysis.py
+            # supaya logikanya bisa diuji tanpa Streamlit dan rencana keluar
+            # tidak memakai informasi masa depan.
+            analysis = analyze_chart(
+                prices_df,
+                distance=distance,
+                prominence=prominence,
+                trend_tol=trend_tolerance_pct / 100,
                 lookback_swings=int(lookback_swings),
+                confirmation_ratio=confirmation_ratio,
+                break_tol=break_tol_pct / 100,
+                pullback_tol=pullback_tol_pct / 100,
+                breakout_tol=breakout_tol_pct / 100,
+                cut_loss_tol=cut_loss_tol_pct / 100,
+                levels_per_side=int(levels_per_side),
             )
+            highs_idx, lows_idx = analysis.highs_idx, analysis.lows_idx
+            trend = analysis.trend
+            trendline = analysis.trendline
+            break_check = analysis.break_check
+            channel, channel_break = analysis.channel, analysis.channel_break
+            fan, fan_direction = analysis.fan, analysis.fan_direction
+            sr_levels = analysis.levels
+            breakout_rows = [
+                (p.level, p.tests, p.signal, p.plan, p.position)
+                for p in analysis.resistance_plans
+            ]
             anchors = select_anchor_points(
                 trend, prices_df["Low"], prices_df["High"], confirmation_ratio
-            )
-            trendline = build_trendline(
-                trend,
-                prices_df["Low"],
-                prices_df["High"],
-                end_index=len(prices_df) - 1,
-                confirmation_ratio=confirmation_ratio,
             )
 
             fig = plot_candlestick(
                 prices_df, title=ticker, highs_idx=highs_idx, lows_idx=lows_idx
             )
-            break_check = None
-            channel = channel_break = None
             if trendline is not None:
                 add_trendline(fig, prices_df, trendline)
-                break_check = check_trendline_break(
-                    trendline,
-                    prices_df["Close"],
-                    prices_df["Low"],
-                    prices_df["High"],
-                    prices_df["Open"],
-                    tol=break_tol_pct / 100,
-                )
                 add_break_markers(fig, prices_df, trendline, break_check)
-                channel = build_channel(
-                    trendline, prices_df["High"], prices_df["Low"], highs_idx, lows_idx
-                )
-                if channel is not None:
-                    add_channel(fig, prices_df, channel)
-                    channel_break = check_channel_break(
-                        channel, prices_df["Close"], tol=break_tol_pct / 100
-                    )
-            # The Fan Principle menguji PEMBALIKAN tren, jadi hanya masuk akal
-            # bila ada tren yang sedang berlangsung. Chart sideways / tidak jelas
-            # tidak dipaksakan: arah kipasnya pun tidak ada.
-            fan = None
-            fan_direction = None
-            if trend.trend in (UPTREND, DOWNTREND):
-                fan_direction = FAN_BEARISH if trend.trend == UPTREND else FAN_BULLISH
-                fan = detect_fan(
-                    fan_direction,
-                    prices_df["Close"],
-                    prices_df["High"],
-                    prices_df["Low"],
-                    highs_idx,
-                    lows_idx,
-                    tol=break_tol_pct / 100,
-                )
+            if channel is not None:
+                add_channel(fig, prices_df, channel)
             if fan is not None:
                 add_fan(fig, prices_df, fan)
-
-            sr_levels = levels_from_swings(
-                prices_df,
-                highs_idx,
-                lows_idx,
-                per_side=int(lookback_swings),
-                pullback_tol=pullback_tol_pct / 100,
-            )
             add_levels(fig, prices_df, sr_levels)
-
-            # Validasi breakout per resistance: uji berulang, breakout sah,
-            # 2nd day, rencana keluar, status posisi. Hanya up-trendline yang
-            # dipakai sebagai patokan "tahan selama tren naik".
-            exit_trendline = trendline if trendline is not None and trend.trend == UPTREND else None
-            breakout_rows = []
-            for level in sr_levels:
-                if level.initial_role != RESISTANCE:
-                    continue
-                signal = find_breakout(
-                    level.price,
-                    prices_df["Close"],
-                    prices_df["Open"],
-                    start_index=level.origin_index + 1,
-                    tol=breakout_tol_pct / 100,
-                )
-                tests = count_resistance_tests(
-                    level.price,
-                    highs_idx,
-                    prices_df["High"],
-                    prices_df["Close"],
-                    until_index=signal.breakout_index if signal else None,
-                    breakout_tol=breakout_tol_pct / 100,
-                )
-                plan = position = None
-                if signal is not None and signal.entry_index is not None:
-                    plan = build_trading_plan(
-                        level.price, signal.entry_price, cut_loss_tol=cut_loss_tol_pct / 100
-                    )
-                    position = evaluate_breakout_position(
-                        plan,
-                        signal.entry_index,
-                        prices_df["Close"],
-                        trendline=exit_trendline,
-                        trendline_tol=break_tol_pct / 100,
-                    )
-                breakout_rows.append((level, tests, signal, plan, position))
 
             # Resistance yang berdekatan sering memicu rencana yang sama; supaya
             # chart tidak penuh, gambar hanya rencana dengan tanggal masuk terbaru.
-            plans_with_entry = [r for r in breakout_rows if r[3] is not None]
-            if plans_with_entry:
-                _, _, signal, plan, position = max(
-                    plans_with_entry, key=lambda r: r[2].entry_index
+            latest_plan = analysis.latest_plan
+            if latest_plan is not None:
+                add_breakout_plan(
+                    fig, prices_df, latest_plan.signal, latest_plan.plan, latest_plan.position
                 )
-                add_breakout_plan(fig, prices_df, signal, plan, position)
 
             st.plotly_chart(fig, width="stretch")
+
+            if is_last_bar_provisional(prices_df, interval):
+                st.warning(
+                    f"Bar terakhir ({prices_df.index[-1].strftime('%Y-%m-%d')}) masih "
+                    "berjalan, jadi harga penutupannya belum final. Semua aturan di "
+                    "bawah bertumpu pada Close — status valid break, cut-loss, dan "
+                    "konfirmasi 2nd day yang menyala sekarang masih bisa batal."
+                )
 
             # Hasil ditaruh di expander supaya halaman bisa dilipat per bagian;
             # judulnya memuat ringkasan agar tetap informatif saat dilipat.
@@ -1215,7 +1204,7 @@ with tab_teknikal:
                         )
 
             if sr_levels:
-                n_support = sum(level.role == "support" for level in sr_levels)
+                n_support = sum(level.role == SUPPORT for level in sr_levels)
                 with st.expander(
                     f"Level Support & Resistance Horizontal ({len(sr_levels)} level: "
                     f"{n_support} support, {len(sr_levels) - n_support} resistance)",
@@ -1337,9 +1326,11 @@ with tab_portofolio:
 
     c = st.columns([3, 1])
     with c[0]:
+        saved_positions = load_value(KEY_PORTFOLIO, []) or []
         positions_df = st.data_editor(
             pd.DataFrame(
-                {"Ticker": ["BBCA.JK"], "Sektor": ["Bank"], "Nilai Posisi (Rp)": [0.0]}
+                saved_positions
+                or {"Ticker": ["BBCA.JK"], "Sektor": ["Bank"], "Nilai Posisi (Rp)": [0.0]}
             ),
             num_rows="dynamic",
             width="stretch",
@@ -1363,6 +1354,14 @@ with tab_portofolio:
             for _, row in positions_df.iterrows()
             if str(row["Ticker"]).strip() and str(row["Ticker"]) != "nan"
         ]
+        # Simpan posisi apa adanya supaya tidak perlu diketik ulang tiap sesi.
+        save_value(
+            KEY_PORTFOLIO,
+            [
+                {"Ticker": p.ticker, "Sektor": p.sector, "Nilai Posisi (Rp)": p.value}
+                for p in positions
+            ],
+        )
         review = review_portfolio(positions, cash)
 
         if review.total_value <= 0:
@@ -1399,11 +1398,22 @@ with tab_checklist:
             "Kriteria ini sengaja tidak dinilai otomatis — tidak ada skor, tidak ada "
             "lolos/gagal. Rangkumannya hanya mengingatkan mana yang belum kamu cek."
         )
+        # Jawaban tersimpan antar-sesi: checklist ini dijawab bertahap sambil
+        # membaca laporan keuangan, bukan sekali duduk.
+        saved_answers = load_value(KEY_CHECKLIST, {}) or {}
         answers = {}
         for item_key, question in QUALITATIVE_CHECKLIST.items():
+            saved = saved_answers.get(item_key)
+            index = ANSWER_OPTIONS.index(saved) if saved in ANSWER_OPTIONS else 0
             answers[item_key] = st.radio(
-                question, ANSWER_OPTIONS, horizontal=True, key=f"chk_{item_key}"
+                question,
+                ANSWER_OPTIONS,
+                index=index,
+                horizontal=True,
+                key=f"chk_{item_key}",
             )
+        if answers != saved_answers:
+            save_value(KEY_CHECKLIST, answers)
 
         summary = summarize_checklist(answers)
         c = st.columns(3)

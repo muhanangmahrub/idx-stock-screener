@@ -1,8 +1,15 @@
-streamlit>=1.38
-yfinance>=0.2.40
-curl_cffi>=0.7  # akses endpoint idx.co.id (sudah jadi dependency yfinance)
-scipy>=1.11
-plotly>=5.20
-pandas>=2.0
-numpy>=1.26
-pytest>=8.0
+# Versi dibatasi atas: yfinance & streamlit cukup sering mengubah API/nama baris
+# laporan keuangan. Naikkan batasnya secara sadar, lalu jalankan:
+#   pytest                      (unit test, tanpa jaringan)
+#   pytest -m network           (penjaga kontrak yfinance/IDX)
+streamlit>=1.38,<2
+yfinance>=0.2.40,<0.3
+curl_cffi>=0.7,<1  # akses endpoint idx.co.id (sudah jadi dependency yfinance)
+scipy>=1.11,<2
+plotly>=5.20,<7
+pandas>=2.0,<3
+numpy>=1.26,<3
+
+# Alat bantu pengembangan
+pytest>=8.0,<10
+ruff>=0.6,<1

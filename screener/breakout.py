@@ -47,7 +47,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from screener.trend import DEFAULT_BREAK_TOLERANCE, UP_TRENDLINE, Trendline, break_threshold
+from screener.trend import (
+    DEFAULT_BREAK_TOLERANCE,
+    SECOND_DAY_CONFIRMED,
+    SECOND_DAY_PENDING,
+    UP_TRENDLINE,
+    Trendline,
+    break_threshold,
+)
 
 # Angka buku.
 BREAKOUT_TOLERANCE = 0.015  # Close harus > resistance * 1,015
@@ -56,9 +63,8 @@ STRONG_RESISTANCE_MIN_TESTS = 3  # diuji >= 3 kali = strong resistance
 # ASUMSI (bukan buku): seberapa dekat swing high ke level supaya dihitung "menguji".
 DEFAULT_TEST_TOLERANCE = 0.015
 
-SECOND_DAY_CONFIRMED = "terkonfirmasi"
+# Label 2nd day sama dengan yang dipakai trendline (aturan bukunya memang sama).
 SECOND_DAY_GAP_BACK = "gap kembali"
-SECOND_DAY_PENDING = "menunggu open sesi berikutnya"
 
 POSITION_HOLD = "hold"
 EXIT_CUT_LOSS = "cut loss (false breakout)"

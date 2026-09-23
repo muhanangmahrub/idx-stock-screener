@@ -137,7 +137,7 @@ class TestFanStructure:
     def test_each_anchor_comes_after_the_previous_break(self):
         df, highs_idx, lows_idx = _bearish_fan()
         fan = _detect(df, highs_idx, lows_idx)
-        for previous, current in zip(fan.lines, fan.lines[1:]):
+        for previous, current in zip(fan.lines, fan.lines[1:], strict=False):
             assert current.anchor.index > previous.break_index
 
     def test_lines_pass_through_origin_and_anchor(self):

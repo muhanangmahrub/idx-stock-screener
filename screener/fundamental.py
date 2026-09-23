@@ -102,6 +102,13 @@ def is_cheap_valuation(per: float | None, pbv: float | None, is_blue_chip: bool)
     return cheap_by_per or cheap_by_pbv
 
 
+# ASUMSI (bukan angka Teguh Hidayat): di atas ROE ini, `pbv_base = ROE/10`
+# menghasilkan PBV wajar yang sulit dipercaya (ROE 570% -> 57x). Rumusnya
+# sengaja TIDAK dibatasi - pemilik memilih diberi peringatan saja - supaya
+# angka buku tidak diam-diam diubah.
+HIGH_ROE_WARNING_PCT = 50.0
+
+
 @dataclass
 class Valuation:
     pbv_base: float
@@ -109,6 +116,7 @@ class Valuation:
     fair_price_adj: float
     best_buy: float
     max_buy: float
+    warnings: list[str] = field(default_factory=list)
 
 
 def compute_valuation(
@@ -143,7 +151,46 @@ def compute_valuation(
         fair_price_adj=fair_price_adj,
         best_buy=best_buy,
         max_buy=max_buy,
+        warnings=valuation_warnings(roe_annualized_pct, pbv_base),
     )
+
+
+def valuation_warnings(
+    roe_annualized_pct: float, pbv_base: float, high_roe_pct: float = HIGH_ROE_WARNING_PCT
+) -> list[str]:
+    """Peringatan kewajaran hasil `compute_valuation` - tidak mengubah angkanya.
+
+    `pbv_base = ROE/10` tidak punya batas atas, jadi ROE ekstrem (mis. emiten
+    berekuitas tipis karena rajin bagi dividen) menghasilkan PBV wajar yang
+    tidak realistis. Angka buku dibiarkan apa adanya; pemilik yang menilai.
+    """
+    warnings = []
+    if roe_annualized_pct > high_roe_pct:
+        warnings.append(
+            f"ROE {roe_annualized_pct:.0f}% di atas {high_roe_pct:.0f}% membuat PBV "
+            f"wajar {pbv_base:.1f}x — harga wajar kemungkinan tidak realistis; "
+            "periksa apakah ekuitas tergerus dividen/buyback atau ada laba sekali jalan"
+        )
+    if roe_annualized_pct < 0:
+        warnings.append(
+            "ROE negatif membuat harga wajar negatif — jalur valuasi ini tidak "
+            "berlaku untuk emiten yang sedang rugi"
+        )
+    return warnings
+
+
+def roe_ttm_pct(net_income_ttm: float | None, equity: float | None) -> float | None:
+    """ROE dari laba TTM (4 kuartal terakhir) - default proyek sejak 2026-09-23.
+
+    Dipilih pemilik daripada "kuartal terakhir x4" karena angka satu kuartal
+    sangat musiman: pada UNVR, best buy bergeser 568 / 1.465 / 2.948 hanya
+    karena kuartal mana yang terbaru. Faktor penyetahunan buku (Q1 x4, 1H x2,
+    Q3 x4/3, FY x1) tetap dipakai lewat `annualize_roe_pct` untuk angka
+    kumulatif YTD yang diisi manual dari laporan keuangan.
+    """
+    if net_income_ttm is None or not equity:
+        return None
+    return net_income_ttm / equity * 100
 
 
 @dataclass

@@ -1,0 +1,26 @@
+[project]
+name = "idx-screener"
+version = "0.1.0"
+description = "Screener saham IDX: fundamental (Teguh Hidayat) + teknikal (Edianto Ong)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not network'"
+markers = [
+    "network: butuh koneksi internet (yfinance / idx.co.id); dilewati secara default",
+]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+
+[tool.ruff.lint]
+# E,F: kesalahan dasar. I: urutan impor. B: jebakan umum. UP: idiom modern.
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # panjang baris diatur formatter, bukan error
+]
+
+[tool.ruff.format]
+quote-style = "double"

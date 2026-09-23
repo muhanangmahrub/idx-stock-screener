@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from screener.levels import SUPPORT
+from screener.trend import UP_TRENDLINE
+
 MAX_DATE_TICKS = 10
 
 
@@ -111,7 +114,7 @@ def add_trendline(fig: go.Figure, df: pd.DataFrame, trendline) -> go.Figure:
     antar-bar di chart seragam sehingga garisnya tampak lurus.
     """
     bar_indices = np.arange(trendline.start_index, trendline.end_index + 1)
-    color = "green" if trendline.kind == "up-trendline" else "red"
+    color = "green" if trendline.kind == UP_TRENDLINE else "red"
 
     fig.add_trace(
         go.Scatter(
@@ -142,7 +145,7 @@ def add_break_markers(fig: go.Figure, df: pd.DataFrame, trendline, break_check) 
     untuk down-trendline; valid break di Close, karena Close-lah yang
     menentukan keabsahan penembusan menurut buku.
     """
-    pierce_col = "Low" if trendline.kind == "up-trendline" else "High"
+    pierce_col = "Low" if trendline.kind == UP_TRENDLINE else "High"
 
     if break_check.whipsaw_indices:
         fig.add_trace(
@@ -188,7 +191,7 @@ def add_levels(fig: go.Figure, df: pd.DataFrame, levels) -> go.Figure:
     ditandai lingkaran, keduanya di harga level.
     """
     for level in levels:
-        color = "green" if level.role == "support" else "red"
+        color = "green" if level.role == SUPPORT else "red"
         x = [level.origin_index, level.end_index]
         fig.add_trace(
             go.Scatter(

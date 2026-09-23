@@ -47,8 +47,10 @@ import pandas as pd
 SUPPORT = "support"
 RESISTANCE = "resistance"
 
-VALID_BREAK = "valid break"
-FALSE_BREAK = "false break"
+# Label penembusan dipakai bersama trendline supaya istilah di UI tidak
+# bercabang: mengubahnya di satu tempat ikut berlaku di semua tampilan.
+from screener.trend import FALSE_BREAK, VALID_BREAK  # noqa: E402  (re-export)
+
 PULLBACK = "pullback"  # harga kembali menguji level yang sudah dilewati, dan level bertahan
 
 

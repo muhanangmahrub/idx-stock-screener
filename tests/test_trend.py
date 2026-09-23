@@ -4,19 +4,15 @@ import pytest
 
 from screener.extrema import get_extrema
 from screener.trend import (
-    FALSE_BREAK,
-    LINE_INTACT,
-    SECOND_DAY_CONFIRMED,
-    SECOND_DAY_PENDING,
-    VALID_BREAK,
-    AnchorPoint,
-    break_threshold,
-    check_trendline_break,
     CONFIRM_FULL_BREAK,
     CONFIRM_HALF_WAY,
     DEFAULT_BREAK_TOLERANCE,
     DOWN_TRENDLINE,
     DOWNTREND,
+    FALSE_BREAK,
+    LINE_INTACT,
+    SECOND_DAY_CONFIRMED,
+    SECOND_DAY_PENDING,
     SIDEWAYS,
     STEP_DOWN,
     STEP_FLAT,
@@ -24,10 +20,14 @@ from screener.trend import (
     UNDEFINED,
     UP_TRENDLINE,
     UPTREND,
+    VALID_BREAK,
+    AnchorPoint,
     SwingPoint,
     Trendline,
     TrendResult,
+    break_threshold,
     build_trendline,
+    check_trendline_break,
     classify_steps,
     classify_trend,
     fit_line,
@@ -45,11 +45,11 @@ def _zigzag(peaks: list[float], troughs: list[float], bars_per_leg: int = 5) -> 
     terakhir, supaya semua dasar/puncak yang diminta ada di tengah.
     """
     anchors = [peaks[0]]
-    for trough, peak in zip(troughs, peaks):
+    for trough, peak in zip(troughs, peaks, strict=True):
         anchors += [trough, peak]
     anchors.append(troughs[-1])
     points = []
-    for start, end in zip(anchors, anchors[1:]):
+    for start, end in zip(anchors, anchors[1:], strict=False):
         points += list(np.linspace(start, end, bars_per_leg, endpoint=False))
     points.append(anchors[-1])
     return pd.Series(points, dtype=float)

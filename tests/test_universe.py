@@ -1,12 +1,12 @@
 import pandas as pd
 
 from screener.universe import (
-    apply_sector_comparison,
-    STATUS_REJECTED,
     STATUS_DATA_MISSING,
     STATUS_FAILED,
     STATUS_PASSED,
+    STATUS_REJECTED,
     UniverseCandidate,
+    apply_sector_comparison,
     candidates_to_dataframe,
     filter_liquid_stocks,
     screen_candidate,

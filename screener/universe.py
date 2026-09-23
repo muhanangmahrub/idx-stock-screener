@@ -18,14 +18,13 @@ Fungsi pengambil data disuntikkan sebagai parameter supaya modul ini bisa
 di-unit-test dengan data palsu tanpa menyentuh jaringan.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import pandas as pd
 
-from screener.formatting import format_rupiah
 from screener.financials import absolute_rejects
-from screener.sector import SectorStats, compare_to_sector, sector_averages
+from screener.formatting import format_rupiah
 from screener.fundamental import (
     BLUE_CHIP_MAX_PER,
     MAX_PBV_CHEAP,
@@ -36,6 +35,7 @@ from screener.fundamental import (
     is_cheap_valuation,
     passes_initial_screening,
 )
+from screener.sector import SectorStats, compare_to_sector, sector_averages
 
 STATUS_PASSED = "lolos"
 STATUS_FAILED = "tidak lolos"
@@ -115,8 +115,12 @@ def _ratio_text(value: float | None, decimals: int = 1) -> str:
     return "n/a" if value is None else f"{value:.{decimals}f}"
 
 
-def _apply_cheap_valuation(candidate: UniverseCandidate) -> None:
-    """Tahap 5: aturan valuasi murah (bagian C) dengan batas small cap untuk semua.
+def _apply_cheap_valuation(candidate: UniverseCandidate, is_blue_chip: bool) -> None:
+    """Tahap 5: aturan valuasi murah (bagian C).
+
+    Blue chip memakai batas PER 12, sisanya batas small cap PER 8. Daftar blue
+    chip ditentukan pemilik secara manual (keputusan 2026-09-23) - bukan
+    ditebak dari market cap, karena buku tidak memberi ambangnya.
 
     Dipanggil hanya untuk kandidat yang sudah lolos bagian A, jadi status
     awalnya STATUS_PASSED dan hanya perlu diubah kalau gugur.
@@ -126,18 +130,19 @@ def _apply_cheap_valuation(candidate: UniverseCandidate) -> None:
         _missing(candidate, "PER dan PBV tidak didapat dari yfinance")
         return
 
-    if not is_cheap_valuation(per=per, pbv=pbv, is_blue_chip=False):
+    max_per = BLUE_CHIP_MAX_PER if is_blue_chip else SMALL_CAP_MAX_PER
+    if not is_cheap_valuation(per=per, pbv=pbv, is_blue_chip=is_blue_chip):
         _fail(
             candidate,
-            f"Valuasi tidak murah: PER {_ratio_text(per)} > {SMALL_CAP_MAX_PER} "
+            f"Valuasi tidak murah: PER {_ratio_text(per)} > {max_per} "
             f"dan PBV {_ratio_text(pbv, 2)} > {MAX_PBV_CHEAP}",
         )
-        # Batas small cap dipakai untuk semua; kalau emiten ini sebenarnya blue
-        # chip, PER-nya masih di bawah 12 dan layak dicek ulang manual.
-        if per is not None and SMALL_CAP_MAX_PER < per <= BLUE_CHIP_MAX_PER:
+        # Emiten di luar daftar blue chip dinilai dengan batas small cap; bila
+        # PER-nya masih di bawah batas blue chip, itu layak dicek ulang manual.
+        if not is_blue_chip and per is not None and SMALL_CAP_MAX_PER < per <= BLUE_CHIP_MAX_PER:
             candidate.notes = (candidate.notes or []) + [
                 f"PER {per:.1f} masih <= {BLUE_CHIP_MAX_PER} (batas blue chip); "
-                "bila emiten ini blue chip, cek manual di tab analisis tunggal"
+                "bila emiten ini blue chip, tambahkan ke daftar blue chip"
             ]
 
 
@@ -146,6 +151,7 @@ def screen_candidate(
     fetch_free_float: FetchFreeFloat,
     fetch_fundamental: FetchFundamental,
     blacklist: set[str] = frozenset(),
+    blue_chips: set[str] = frozenset(),
 ) -> UniverseCandidate:
     """Jalankan tahap 2-5 untuk satu emiten; berhenti di tahap pertama yang gugur.
 
@@ -174,10 +180,12 @@ def screen_candidate(
 
     # Tolak mutlak diperiksa sebelum threshold: kalau ekuitas/laba/valuasi
     # negatif, angka rasio lain tidak perlu dinilai lagi.
+    # Laba TTM, bukan satu kuartal (keputusan pemilik 2026-09-23): rugi satu
+    # kuartal musiman bukan maksud "laba bersih negatif" di buku.
     rejects = absolute_rejects(
         retained_earnings=fundamental.get("retained_earnings"),
         equity=fundamental.get("equity"),
-        net_income=fundamental.get("net_income"),
+        net_income=fundamental.get("net_income_ttm"),
         per=candidate.per,
         pbv=candidate.pbv,
     )
@@ -199,7 +207,7 @@ def screen_candidate(
         ),
     )
     if candidate.status == STATUS_PASSED:
-        _apply_cheap_valuation(candidate)
+        _apply_cheap_valuation(candidate, is_blue_chip=candidate.stock_code in blue_chips)
 
     # Catatan kualitas data dari fetcher (mis. PBV dikosongkan karena laporan
     # keuangan dalam USD) ikut ditampilkan supaya sel kosong bisa dijelaskan.
@@ -214,6 +222,7 @@ def screen_universe(
     fetch_free_float: FetchFreeFloat,
     fetch_fundamental: FetchFundamental,
     blacklist: set[str] = frozenset(),
+    blue_chips: set[str] = frozenset(),
     on_progress: ProgressCallback | None = None,
 ) -> list[UniverseCandidate]:
     """Jalankan `screen_candidate` ke daftar hasil `filter_liquid_stocks`.
@@ -223,7 +232,9 @@ def screen_universe(
     """
     total = len(candidates)
     for index, candidate in enumerate(candidates, start=1):
-        screen_candidate(candidate, fetch_free_float, fetch_fundamental, blacklist)
+        screen_candidate(
+            candidate, fetch_free_float, fetch_fundamental, blacklist, blue_chips
+        )
         if on_progress is not None:
             on_progress(index, total, candidate.stock_code)
     return candidates
