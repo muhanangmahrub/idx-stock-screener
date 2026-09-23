@@ -61,9 +61,15 @@ idx-screener/
 │   ├── fan.py                # the fan principle: konfirmasi reversal pada garis ketiga
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
+│   ├── analysis.py           # orkestrasi analisis chart lapis 2 (satu pintu, tanpa lookahead)
+│   ├── backtest.py           # mesin walk-forward untuk mengukur dampak perubahan aturan
+│   ├── fundamental_history.py # fundamental titik-waktu dari laporan tahunan (gerbang lapis 1)
+│   ├── storage.py            # simpan isian pemilik (blacklist, blue chip, checklist, portofolio)
 │   ├── financials.py         # rasio dari komponen LK mentah + aturan kualitas (e-book)
 │   ├── sector.py             # median PER/PBV per sektor (jalur valuasi opsional)
 │   └── plotting.py           # fungsi chart plotly
+├── scripts/
+│   └── backtest_cli.py       # jalankan backtest ke beberapa emiten
 └── tests/
     ├── test_patterns.py      # unit test tiap detektor pola
     ├── test_trend.py         # unit test klasifikasi tren (data zigzag sintetis)
@@ -102,6 +108,16 @@ poin penting untuk portfolio QA.
 
 6. **Definisi selesai (definition of done):** kode jalan + ada unit test yang lulus +
    nama variabel jelas + teks pengguna menegaskan ini alat bantu, bukan rekomendasi.
+
+## Perkakas
+
+- `pytest` — unit test tanpa jaringan (default; test bertanda `network`
+  dilewati). `pytest -m network` menjalankan penjaga kontrak yfinance/IDX;
+  jalankan tiap kali menaikkan versi yfinance.
+- `ruff check .` — linter & urutan impor (konfigurasi di `pyproject.toml`).
+- `requirements.txt` memberi batas atas versi: yfinance & streamlit cukup
+  sering mengubah API.
+- `user_data.json` (di-gitignore) menyimpan isian pemilik antar-sesi.
 
 ## Gaya kode
 
@@ -220,6 +236,26 @@ sering bolong.
   tersedia sebagai fitur OPSIONAL di `sector.py` + checkbox di tab
   Screening Massal, hasilnya hanya catatan, tidak mengubah status lolos.
 - Jangan menghapus salah satu jalur tanpa instruksi pemilik.
+
+### Keputusan metode pemilik (2026-09-23, hasil audit)
+
+Empat keputusan yang mengubah angka; ditulis di sini supaya tidak ditebak ulang.
+
+1. **ROE disetahunkan = laba TTM** (jumlah 4 kuartal terakhir) / ekuitas
+   terakhir — `fundamental.roe_ttm_pct`, dipakai `data.get_fundamental_data`.
+   Alasan: "kuartal terakhir ×4" sangat musiman; pada UNVR best buy bergeser
+   568 / 1.465 / 2.948 hanya karena kuartal mana yang terbaru. Faktor buku
+   (Q1 ×4, 1H ×2, Q3 ×4/3, FY ×1) tetap berlaku untuk angka kumulatif YTD
+   yang diisi manual di bagian Analisis Laporan Keuangan.
+2. **`pbv_base = ROE/10` TIDAK dibatasi** — angka buku dibiarkan apa adanya.
+   Yang ditambahkan hanya peringatan (`fundamental.valuation_warnings`) saat
+   ROE > 50% (ASUMSI, bukan angka buku), karena PBV wajar jadi sulit dipercaya.
+3. **Tolak mutlak "laba bersih negatif" memakai laba TTM**, bukan satu
+   kuartal — rugi satu kuartal musiman bukan maksud buku.
+4. **Blue chip ditentukan daftar manual** pemilik (input di tab Screening
+   Massal, tersimpan di `user_data.json`), bukan ambang market cap, karena
+   buku tidak memberi angkanya. Yang ada di daftar memakai PER ≤ 12, sisanya
+   PER ≤ 8.
 
 ### Batas otomasi (JANGAN dilanggar)
 
@@ -431,6 +467,73 @@ daily tersedia sejak 2004; intraday dibatasi yfinance (1m: 7 hari, 5m–30m:
 60 hari) dan bar 09:00 sering volume 0 (pre-opening) sehingga harus dibuang
 sebelum deteksi pola. Pemetaan ke `get_price_history(ticker, period,
 interval)`: weekly 3 thn = `("3y", "1wk")`, daily 1 thn = `("1y", "1d")`.
+
+## Backtest (screener/backtest.py + fundamental_history.py)
+
+Ada untuk MENGUKUR DAMPAK perubahan aturan, bukan mencari strategi terbaik.
+Tiap kali sebuah angka aturan diubah, jalankan dan bandingkan ekspektasi &
+profit factor-nya — supaya keputusan tidak berdasar kesan.
+
+    venv/bin/python scripts/backtest_cli.py --layer1 --growth
+
+- **Walk-forward, tanpa lookahead.** Keputusan di bar `t` hanya memakai
+  `df.iloc[:t+1]`; dikunci test "menambah data setelah periode uji tidak
+  mengubah keputusan di dalam periode itu".
+- **Aturan yang diuji = aturan repo.** Mesin memanggil `analysis`,
+  `breakout`, `trend` — tidak ada logika sinyal yang ditulis ulang.
+- **Fundamental titik-waktu** dari laporan TAHUNAN, dianggap terbit 90 hari
+  setelah tutup buku (`REPORTING_LAG_DAYS`).
+- **Batasan yang wajib disebut saat membaca hasil:** jumlah saham memakai
+  angka sekarang untuk semua tahun (yfinance tidak punya historisnya); free
+  float & checklist kualitatif tidak diuji; fundamental hanya diperbarui
+  setahun sekali; universe dipilih manual (survivorship); biaya 0,15% beli /
+  0,25% jual adalah asumsi; pada chart mingguan cut-loss hanya diperiksa di
+  penutupan minggu.
+- **Angkanya untuk membandingkan antar-aturan**, bukan memperkirakan
+  keuntungan masa depan. Jangan mengoptimasi parameter terhadap data ini —
+  itu curve-fitting.
+
+### Hasil uji pertama (20 emiten, Apr 2022 – Sep 2026, weekly)
+
+| Konfigurasi | Trade | Win | Ekspektasi | PF |
+|---|---|---|---|---|
+| Lapis 2 saja | 156 | 19,2% | −2,99% | 0,57 |
+| Lapis 1 + 2 | 39 | 17,9% | −4,19% | 0,36 |
+| Lapis 1 + 2, tanpa cut-loss | 16 | 37,5% | −2,77% | 0,77 |
+| Lapis 1 + 2, cut-loss + keluar saat fundamental gugur | 43 | 30,2% | −1,39% | 0,75 |
+| Lapis 1 + 2 + syarat pertumbuhan ideal | 5 | 40,0% | +5,20% | 2,29 |
+
+Catatan: baris terakhir hanya 5–8 trade (4% waktu lolos) — menarik, tapi
+terlalu sedikit untuk disebut bukti.
+
+**Ketegangan yang ditemukan:** cut-loss 1,5% (Edianto Ong) menendang keluar
+posisi yang menurut Teguh Hidayat justru layak di-average down (bagian F).
+Keduanya ada di repo tapi belum didamaikan — keputusan pemilik.
+
+## Kejujuran angka (hasil audit 2026-09-23)
+
+- **Harga nominal untuk Lapis 2.** `get_price_history(..., adjusted=False)`
+  adalah default: support/resistance, batas breakout, dan cut-loss harus
+  memakai harga yang dilihat pelaku pasar lain dan sesuai tick IDX. Harga
+  tersesuaikan dividen (`adjusted=True`) hanya untuk perbandingan imbal
+  hasil jangka panjang.
+- **Bar terakhir bisa belum selesai.** `data.is_last_bar_provisional` dipakai
+  UI untuk memperingatkan bahwa Close bar berjalan belum final, sehingga
+  status valid break / cut-loss / 2nd day masih bisa batal.
+- **Tanpa lookahead.** Garis yang dipakai menilai keluar posisi dibangun
+  hanya dari swing sampai bar masuk (`analysis.build_exit_trendline`).
+  Sebelumnya garis dibangun dari seluruh periode, sehingga simulasi rencana
+  tampak lebih baik daripada yang bisa dicapai nyata.
+- **Level lama tidak boleh hilang.** Jumlah level S/R punya parameter
+  sendiri (`analysis.DEFAULT_LEVELS_PER_SIDE`, default 6), terpisah dari
+  `lookback_swings` klasifikasi tren, karena buku menyatakan level yang
+  lebih lama lebih kuat.
+- **Median sektor** dihitung dari emiten yang ikut diproses screening (sudah
+  tersaring likuiditas & blacklist), bukan seluruh emiten sektor itu — UI
+  menyebutkan ini.
+- **Bank tidak punya baris "Operating Income"** di yfinance, jadi laba usaha
+  kosong dan aturan kualitas pertumbuhan hanya memakai penjualan & laba
+  bersih. Dijaga `tests/test_data_contract.py`.
 
 ## Jangan memaksakan pola
 
