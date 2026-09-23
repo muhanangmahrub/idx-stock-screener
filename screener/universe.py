@@ -24,6 +24,8 @@ from typing import Callable
 import pandas as pd
 
 from screener.formatting import format_rupiah
+from screener.financials import absolute_rejects
+from screener.sector import SectorStats, compare_to_sector, sector_averages
 from screener.fundamental import (
     BLUE_CHIP_MAX_PER,
     MAX_PBV_CHEAP,
@@ -38,6 +40,10 @@ from screener.fundamental import (
 STATUS_PASSED = "lolos"
 STATUS_FAILED = "tidak lolos"
 STATUS_DATA_MISSING = "data kurang"  # tidak bisa dinilai, bukan gagal
+# Kondisi tolak mutlak e-book (saldo laba/ekuitas/laba bersih/PER/PBV negatif):
+# gugur tanpa toleransi, dibedakan dari gagal threshold biasa supaya alasannya
+# terbaca jelas di hasil screening.
+STATUS_REJECTED = "ditolak mutlak"
 
 FetchFreeFloat = Callable[[str], float | None]
 FetchFundamental = Callable[[str], dict]
@@ -53,6 +59,7 @@ class UniverseCandidate:
     roe_annualized_pct: float | None = None
     per: float | None = None
     pbv: float | None = None
+    sector: str | None = None
     status: str = STATUS_DATA_MISSING
     reasons: list[str] | None = None
     notes: list[str] | None = None
@@ -86,6 +93,11 @@ def filter_liquid_stocks(
 def _fail(candidate: UniverseCandidate, reason: str) -> None:
     candidate.status = STATUS_FAILED
     candidate.reasons = [reason]
+
+
+def _reject(candidate: UniverseCandidate, reasons: list[str]) -> None:
+    candidate.status = STATUS_REJECTED
+    candidate.reasons = reasons
 
 
 def _missing(candidate: UniverseCandidate, reason: str) -> None:
@@ -158,6 +170,21 @@ def screen_candidate(
     candidate.roe_annualized_pct = fundamental.get("roe_annualized_pct")
     candidate.per = fundamental.get("per")
     candidate.pbv = fundamental.get("pbv")
+    candidate.sector = fundamental.get("sector")
+
+    # Tolak mutlak diperiksa sebelum threshold: kalau ekuitas/laba/valuasi
+    # negatif, angka rasio lain tidak perlu dinilai lagi.
+    rejects = absolute_rejects(
+        retained_earnings=fundamental.get("retained_earnings"),
+        equity=fundamental.get("equity"),
+        net_income=fundamental.get("net_income"),
+        per=candidate.per,
+        pbv=candidate.pbv,
+    )
+    if rejects:
+        _reject(candidate, rejects)
+        return candidate
+
     if candidate.roe_annualized_pct is None:
         _missing(candidate, "ROE disetahunkan tidak didapat dari yfinance")
         return candidate
@@ -202,6 +229,31 @@ def screen_universe(
     return candidates
 
 
+def apply_sector_comparison(candidates: list[UniverseCandidate]) -> dict[str, SectorStats]:
+    """Bandingkan PER/PBV tiap kandidat dengan median sektornya (jalur OPSIONAL).
+
+    Default proyek tetap jalur harga absolut/story; ini pembanding tambahan
+    dari e-book lama, ditulis sebagai catatan - tidak mengubah status lolos.
+    """
+    stats = sector_averages(
+        [{"sector": c.sector, "per": c.per, "pbv": c.pbv} for c in candidates]
+    )
+    for candidate in candidates:
+        sector_stats = stats.get(candidate.sector or "")
+        if sector_stats is None:
+            continue
+        notes = []
+        per_verdict = compare_to_sector(candidate.per, sector_stats.per_median)
+        pbv_verdict = compare_to_sector(candidate.pbv, sector_stats.pbv_median)
+        if per_verdict:
+            notes.append(f"PER {per_verdict} ({sector_stats.per_median:.1f}x)")
+        if pbv_verdict:
+            notes.append(f"PBV {pbv_verdict} ({sector_stats.pbv_median:.2f}x)")
+        if notes:
+            candidate.notes = (candidate.notes or []) + notes
+    return stats
+
+
 def candidates_to_dataframe(candidates: list[UniverseCandidate]) -> pd.DataFrame:
     """Tabel ringkas untuk ditampilkan di UI; None tampil sebagai sel kosong."""
     return pd.DataFrame(
@@ -214,6 +266,7 @@ def candidates_to_dataframe(candidates: list[UniverseCandidate]) -> pd.DataFrame
                 "ROE disetahunkan (%)": c.roe_annualized_pct,
                 "PER": c.per,
                 "PBV": c.pbv,
+                "Sektor": c.sector,
                 "Status": c.status,
                 "Alasan / catatan": "; ".join((c.reasons or []) + (c.notes or [])),
             }

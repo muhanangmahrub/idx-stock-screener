@@ -1,6 +1,8 @@
 import pandas as pd
 
 from screener.universe import (
+    apply_sector_comparison,
+    STATUS_REJECTED,
     STATUS_DATA_MISSING,
     STATUS_FAILED,
     STATUS_PASSED,
@@ -215,3 +217,72 @@ def test_candidates_to_dataframe_joins_reasons_and_notes():
     assert list(df["Kode"]) == ["BBCA"]
     assert df.loc[0, "Alasan / catatan"] == "alasan; catatan"
     assert df.loc[0, "Nilai transaksi"] == "Rp100.000.000.000"
+
+
+class TestAbsoluteRejectsInFunnel:
+    """Tolak mutlak e-book: gugur tanpa toleransi, status terpisah."""
+
+    def _candidate(self):
+        return UniverseCandidate(
+            stock_code="XXXX", stock_name="PT Rugi", daily_transaction_value=10e9
+        )
+
+    def test_negative_equity_rejects_before_threshold_check(self):
+        candidate = screen_candidate(
+            self._candidate(),
+            fetch_free_float=lambda code: 40.0,
+            fetch_fundamental=lambda ticker: {
+                "equity": -1_000.0, "roe_annualized_pct": 50.0, "per": 5.0, "pbv": 0.5
+            },
+        )
+        assert candidate.status == STATUS_REJECTED
+        assert candidate.reasons == ["Ekuitas negatif"]
+
+    def test_negative_per_is_rejected_not_called_cheap(self):
+        candidate = screen_candidate(
+            self._candidate(),
+            fetch_free_float=lambda code: 40.0,
+            fetch_fundamental=lambda ticker: {"per": -3.0, "roe_annualized_pct": 20.0},
+        )
+        assert candidate.status == STATUS_REJECTED
+        assert "PER negatif" in candidate.reasons
+
+    def test_healthy_candidate_still_passes(self):
+        candidate = screen_candidate(
+            self._candidate(),
+            fetch_free_float=lambda code: 40.0,
+            fetch_fundamental=lambda ticker: {
+                "equity": 1_000.0, "net_income": 100.0, "retained_earnings": 500.0,
+                "roe_annualized_pct": 20.0, "per": 8.0, "pbv": 0.6, "sector": "Bank",
+            },
+        )
+        assert candidate.status == STATUS_PASSED
+        assert candidate.sector == "Bank"
+
+
+class TestSectorComparison:
+    """Jalur opsional: catatan pembanding sektor, tidak mengubah status."""
+
+    def _passed(self, code, per, pbv, sector):
+        candidate = UniverseCandidate(
+            stock_code=code, stock_name=code, daily_transaction_value=10e9,
+            per=per, pbv=pbv, sector=sector, status=STATUS_PASSED,
+        )
+        return candidate
+
+    def test_adds_note_without_changing_status(self):
+        candidates = [
+            self._passed("AAAA", 10.0, 1.0, "Bank"),
+            self._passed("BBBB", 14.0, 2.0, "Bank"),
+            self._passed("CCCC", 30.0, 3.0, "Bank"),
+        ]
+        stats = apply_sector_comparison(candidates)
+        assert stats["Bank"].per_median == 14.0
+        assert all(c.status == STATUS_PASSED for c in candidates)
+        assert any("PER lebih murah" in note for note in candidates[0].notes)
+        assert any("PER lebih mahal" in note for note in candidates[2].notes)
+
+    def test_candidate_without_sector_gets_no_note(self):
+        candidates = [self._passed("AAAA", 10.0, 1.0, None)]
+        apply_sector_comparison(candidates)
+        assert not candidates[0].notes

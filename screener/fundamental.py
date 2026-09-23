@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from screener.financials import PERIOD_Q1, annualize_profit
 from screener.formatting import format_rupiah
 
 MIN_DAILY_TRANSACTION_VALUE = 5_000_000_000  # Rp5 miliar
@@ -197,14 +198,22 @@ def compute_free_float_pct(
 
 
 def annualize_roe_pct(
-    latest_quarter_net_income: float | None, latest_equity: float | None
+    latest_quarter_net_income: float | None,
+    latest_equity: float | None,
+    period: str = PERIOD_Q1,
 ) -> float | None:
-    """ROE disetahunkan dari satu laporan kuartalan.
+    """ROE disetahunkan dari satu laporan keuangan.
 
-    ASUMSI metode: laba bersih kuartal terakhir x 4 dibagi ekuitas terakhir.
-    Sumber hanya menyebut "ROE disetahunkan" tanpa merinci cara anualisasi;
-    kalau pemilik memakai cara lain (mis. YTD x 12/bulan), ubah di sini.
+    `period` menentukan faktor penyetahunan sesuai e-book Metode Analisis
+    Fundamental (Q1 x4, 1H x2, Q3 x4/3, FY x1) - lihat `financials.py`.
+    Default Q1 (x4) karena yfinance memberi laporan per kuartal, dan itu
+    perilaku yang sudah dipakai pemanggil lama.
+
+    Laba di laporan kuartalan yfinance adalah laba kuartal itu sendiri; kalau
+    sumber lain memberi angka kumulatif (YTD), pakai `period` yang sesuai
+    supaya tidak dikali dua kali.
     """
     if latest_quarter_net_income is None or not latest_equity:
         return None
-    return latest_quarter_net_income * 4 / latest_equity * 100
+    annualized = annualize_profit(latest_quarter_net_income, period)
+    return annualized / latest_equity * 100

@@ -91,8 +91,27 @@ def get_fundamental_data(ticker: str) -> dict:
             "yfinance tidak valid, isi manual dari laporan keuangan"
         )
 
+    # Komponen LK mentah untuk jalur hitung sendiri (financials.py): dipakai
+    # saat rasio jadi dari yfinance bolong, dan untuk aturan tolak mutlak.
+    raw_components = {
+        "equity": _latest_row_value(quarterly_balance, "Stockholders Equity"),
+        "total_assets": _latest_row_value(quarterly_balance, "Total Assets"),
+        "total_liabilities": _latest_row_value(
+            quarterly_balance, "Total Liabilities Net Minority Interest"
+        ),
+        "retained_earnings": _latest_row_value(quarterly_balance, "Retained Earnings"),
+        "cash": _latest_row_value(quarterly_balance, "Cash And Cash Equivalents"),
+        "net_income": _latest_row_value(quarterly_income, "Net Income"),
+        "sales": _latest_row_value(quarterly_income, "Total Revenue"),
+        "operating_profit": _latest_row_value(quarterly_income, "Operating Income"),
+        "eps_diluted": _latest_row_value(quarterly_income, "Diluted EPS"),
+        "shares_outstanding": info.get("sharesOutstanding"),
+        "financial_currency": info.get("financialCurrency"),
+    }
+
     return {
         "ticker": ticker,
+        **raw_components,
         "per": info.get("trailingPE"),
         "pbv": info.get("priceToBook") if pbv_valid else None,
         "roe_ttm": info.get("returnOnEquity"),
