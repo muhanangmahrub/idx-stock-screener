@@ -29,9 +29,12 @@ ASUMSI (bukan buku, wajib dikalibrasi):
 - Penembusan dinilai dengan aturan yang sama seperti trendline (Close di
   luar garis ± toleransi, lihat trend.check_trendline_break); di sini
   dilaporkan sebagai status kondisi - bukan sinyal beli/jual.
-- Buku tidak memberi syarat "cukup rapi untuk disebut channeling". Modul ini
-  melaporkan `touches` (berapa swing menyentuh channel line dalam toleransi)
-  supaya kerapian koridor bisa dinilai manual.
+- Buku tidak memberi angka "cukup rapi untuk disebut channeling", tapi
+  channel line tetap sebuah GARIS: butuh minimal 2 titik sentuh supaya
+  koridornya terbukti, sama seperti trendline yang butuh 2 titik acuan.
+  `min_touches` (default 2) menjaga agar channel tidak dipaksakan pada chart
+  yang harganya tidak benar-benar bergerak dalam saluran; `touches`
+  dilaporkan supaya kerapian koridor tetap bisa dinilai manual.
 """
 
 from dataclasses import dataclass
@@ -58,6 +61,9 @@ BIAS_BULLISH = "bullish"
 
 # ASUMSI (bukan buku): seberapa dekat sebuah swing dihitung "menyentuh" channel line.
 DEFAULT_TOUCH_TOLERANCE = 0.02
+# ASUMSI (bukan angka buku): channel line butuh >= 2 titik sentuh supaya
+# koridornya terbukti - sebuah garis butuh dua titik.
+DEFAULT_MIN_TOUCHES = 2
 
 
 @dataclass
@@ -100,13 +106,17 @@ def build_channel(
     highs_idx: np.ndarray,
     lows_idx: np.ndarray,
     touch_tol: float = DEFAULT_TOUCH_TOLERANCE,
+    min_touches: int = DEFAULT_MIN_TOUCHES,
 ) -> Channel | None:
     """Proyeksi sejajar dari `trendline` ke sisi seberang koridor.
 
     Uptrend: channel line di ATAS, ditarik lewat swing high yang paling jauh
     di atas basic trendline. Downtrend: channel line di BAWAH, lewat swing
-    low yang paling jauh di bawahnya. None bila tidak ada swing di sisi
-    seberang dalam rentang channel.
+    low yang paling jauh di bawahnya.
+
+    None bila tidak ada swing di sisi seberang, atau bila channel line hanya
+    disentuh kurang dari `min_touches` swing - artinya harga tidak terbukti
+    bergerak dalam saluran, jadi channel tidak dipaksakan.
     """
     if trendline.kind == UP_TRENDLINE:
         opposite_idx, opposite_prices = highs_idx, highs.to_numpy()
@@ -136,6 +146,8 @@ def build_channel(
         <= abs(channel.channel_value_at(i)) * touch_tol
         for i in candidates
     )
+    if channel.touches < min_touches:
+        return None
     return channel
 
 

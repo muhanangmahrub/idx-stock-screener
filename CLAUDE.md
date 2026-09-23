@@ -58,8 +58,11 @@ idx-screener/
 │   ├── levels.py             # track_level() — support/resistance horizontal, tembus & balik peran
 │   ├── breakout.py           # validasi breakout resistance + trading plan (contoh McD)
 │   ├── channel.py            # channeling: basic trendline + channel line sejajar
+│   ├── fan.py                # the fan principle: konfirmasi reversal pada garis ketiga
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
+│   ├── financials.py         # rasio dari komponen LK mentah + aturan kualitas (e-book)
+│   ├── sector.py             # median PER/PBV per sektor (jalur valuasi opsional)
 │   └── plotting.py           # fungsi chart plotly
 └── tests/
     ├── test_patterns.py      # unit test tiap detektor pola
@@ -67,6 +70,7 @@ idx-screener/
     ├── test_levels.py        # unit test tembus & pembalikan peran level S/R
     ├── test_breakout.py      # unit test breakout & trading plan vs angka contoh McD
     ├── test_channel.py       # unit test channel line & arti penembusannya
+    ├── test_fan.py           # unit test kipas tiga trendline & konfirmasi reversal
     └── test_fundamental.py   # unit test filter fundamental
 ```
 
@@ -165,6 +169,57 @@ jalur PBV, tambahkan jalur harga absolut sebagai fungsi terpisah.
 - HOLD selama fundamental bertumbuh.
 - REBALANCE/EXIT bila holding ≥ 12 bln DAN growth tidak on-track.
 - Evaluasi berkala tiap rilis laporan keuangan kuartalan.
+
+### G. Membaca LK mentah (e-book "Metode Analisis Fundamental" — di financials.py)
+
+Materi PELENGKAP, bukan pengganti bagian A–F. Tujuannya: rasio dihitung
+sendiri dari komponen LK karena angka jadi dari yfinance untuk saham IDX
+sering bolong.
+
+- Rumus: `ROE = laba bersih/ekuitas`, `ROA = laba bersih/aset`,
+  `PER = harga/EPS`, `PBV = market cap/ekuitas`,
+  `market cap = harga × jumlah saham`. Tiga rasio neraca khas beliau:
+  **EDR** = ekuitas/kewajiban, **EER** = saldo laba/ekuitas,
+  **EAR** = ekuitas/aset.
+- **Anualisasi laba wajib** sesuai periode LK: Q1 ×4, half-year ×2,
+  Q3 ×4/3, full year ×1 (`ANNUALIZATION_FACTORS`). Rasio laba tidak valid
+  tanpa ini. `fundamental.annualize_roe_pct` memakai faktor yang sama lewat
+  parameter `period` (default Q1 ×4, perilaku lama).
+- **Kualitas laba** (`assess_growth_quality`): ideal bila penjualan, laba
+  usaha, dan laba bersih naik dan berurutan dari kecil ke besar (UNVR:
+  +10,8% < +13,9% < +18,4%). Warning bila laba bersih naik tapi
+  penjualan/laba usaha turun (laba non-operasional); warning lebih keras
+  bila ketiganya turun. Ini WARNING untuk ditinjau, bukan vonis.
+- **Tolak mutlak** (`absolute_rejects`): saldo laba, ekuitas, laba bersih,
+  PER, atau PBV negatif → "jangan beli tanpa toleransi". Di corong massal
+  jadi `universe.STATUS_REJECTED`, terpisah dari gagal threshold biasa.
+- **Kualitas neraca** (`assess_balance_quality`, WARNING): goodwill/"aset
+  lain-lain" porsinya besar; utang berbunga (bank, obligasi, senior notes)
+  mendominasi kewajiban — lebih berat daripada utang operasional; kas
+  kecil; aset lancar < aset tak lancar; ekuitas besar tapi EER kecil
+  (ekuitas dari right issue, bukan laba — contoh UNSP).
+- Detail teknis: pakai **EPS terdilusi** (bukan basic); jumlah saham dari
+  "modal ditempatkan dan disetor penuh"; LK mata uang asing dikonversi ke
+  Rupiah lewat parameter `fx_rate` sebelum menghitung PER/PBV.
+- Acuan kebenaran test (UNVR 1H10): EDR 48,6%; EER 94,6%; EAR 32,7%;
+  PBV 43,3x; PER 37x; market cap Rp130.855 miliar; ROE disetahunkan 117,3%.
+  Dokumen tidak konsisten soal ekuitas (Rp3.019 miliar dipakai untuk
+  ROE/PBV, tabel menulis Rp3.192 miliar) — test memakai angka yang
+  mereproduksi hasil akhir dokumen, dan membulatkan seperti dokumennya.
+- ASUMSI (bukan angka dokumen): ambang kualitas neraca — goodwill > 20%
+  aset, utang berbunga > 50% kewajiban, kas < 5% aset, EER < 50%. Semua
+  bisa diatur lewat parameter; wajib dikalibrasi.
+
+### G-catatan. Ketegangan antar-sumber soal valuasi (JANGAN diputuskan sendiri)
+
+- E-book lama: bandingkan PER/PBV dengan **rata-rata sektor sejenis**.
+- Rekap Investment Planning (lebih baru): **tidak perlu** membandingkan
+  antar-saham karena tiap perusahaan punya "story" berbeda.
+- Kemungkinan evolusi pemikiran. **Default proyek: ikuti yang lebih baru**
+  (jalur harga absolut di `compute_valuation`). Perbandingan sektor
+  tersedia sebagai fitur OPSIONAL di `sector.py` + checkbox di tab
+  Screening Massal, hasilnya hanya catatan, tidak mengubah status lolos.
+- Jangan menghapus salah satu jalur tanpa instruksi pemilik.
 
 ### Batas otomasi (JANGAN dilanggar)
 
@@ -305,9 +360,39 @@ alur medium term di bawah, bukan short term.
   paling jauh dari basic trendline dalam rentang channel; penembusan
   memakai aturan Close ± toleransi (bagian E); `touches` (jumlah swing yang
   menyentuh channel line, toleransi 2%) dilaporkan sebagai ukuran kerapian
-  koridor — buku tidak memberi syarat "cukup rapi untuk disebut
-  channeling". Status ini kondisi untuk dinilai manual, bukan sinyal
-  jual/beli.
+  koridor. Channel TIDAK dipaksakan: bila channel line disentuh kurang dari
+  `min_touches` (default 2 — sebuah garis butuh dua titik), `build_channel`
+  mengembalikan None dan UI menyatakan channeling tidak terbentuk. Status
+  ini kondisi untuk dinilai manual, bukan sinyal jual/beli.
+
+### G3. The Fan Principle (Bab 14 — sudah di fan.py: detect_fan)
+
+Teknik konfirmasi pembalikan tren; tujuannya menyaring reversal palsu
+dengan konfirmasi bertingkat.
+
+- Tiga trendline memancar dari **satu titik pangkal**. Tren naik yang
+  melemah: harga menembus trendline naik pertama, membentuk lembah baru,
+  lalu dari pangkal yang sama ditarik garis kedua yang lebih landai, begitu
+  seterusnya sampai garis ketiga — tampak seperti kipas yang melebar.
+- **Reversal dikonfirmasi HANYA saat garis ketiga tertembus.** Tembusnya
+  garis pertama/kedua belum berarti apa-apa (bisa sekadar koreksi). Tren
+  naik melemah → tembus garis ketiga ke bawah = konfirmasi tren turun;
+  tren turun menguat → tembus ke atas = konfirmasi tren naik.
+- Berlaku dua arah (bearish & bullish), logikanya cermin.
+- Garis yang sudah tertembus **berganti peran** jadi penghalang: resistance
+  (kipas bearish) / support (kipas bullish); uji ulangnya dicatat
+  (`retest_indices`), konsisten dengan pembalikan peran di levels.py.
+- ASUMSI (bukan buku): titik pangkal = swing low terendah (bearish) / swing
+  high tertinggi (bullish) bila `origin_index` tidak diberikan; acuan tiap
+  garis = swing berikutnya setelah garis sebelumnya tertembus, dengan syarat
+  garis tetap searah tren lama dan makin landai; penembusan memakai Close ±
+  toleransi (bagian E); "menyentuh" saat retest = dalam 2%.
+- TIDAK dipaksakan: (a) kipas hanya dicari saat ada tren yang sedang
+  berlangsung (uptrend/downtrend) — chart sideways atau "tidak jelas"
+  tidak punya tren untuk dibalik; (b) kipas baru dianggap mulai terbentuk
+  setelah garis pertama tertembus (`min_broken_lines`, default 1) — sebelum
+  itu yang ada cuma trendline biasa, jadi `detect_fan` mengembalikan None.
+- Sinyal untuk ditinjau manual, bukan eksekusi otomatis.
 
 ### H. Validasi breakout & trading plan (sudah di breakout.py, contoh McD)
 
@@ -346,6 +431,30 @@ daily tersedia sejak 2004; intraday dibatasi yfinance (1m: 7 hari, 5m–30m:
 60 hari) dan bar 09:00 sering volume 0 (pre-opening) sehingga harus dibuang
 sebelum deteksi pola. Pemetaan ke `get_price_history(ticker, period,
 interval)`: weekly 3 thn = `("3y", "1wk")`, daily 1 thn = `("1y", "1d")`.
+
+## Jangan memaksakan pola
+
+Kalau pola/struktur tidak ada di chart, kembalikan "tidak ada" — jangan
+dipaksakan supaya ada sesuatu yang ditampilkan. Yang sudah berlaku:
+
+- `classify_trend` → "tidak jelas" untuk kombinasi yang tidak masuk
+  definisi (bukan dipaksa ke uptrend/downtrend/sideways).
+- `build_trendline` → None saat tren sideways/tidak jelas atau titik acuan
+  terkonfirmasi < 2.
+- `build_channel` → None saat channel line disentuh < `min_touches` (2).
+- `detect_fan` → None saat tidak ada tren yang berlangsung atau belum ada
+  garis yang tertembus.
+- `find_breakout` → None bila tidak ada Close yang melewati batas breakout;
+  `evaluate_breakout_position` hanya jalan bila ada titik masuk.
+- `scan` (patterns.py) → daftar kosong selama registry detektor kosong.
+
+Pengecualian yang disengaja: `levels_from_swings` selalu menghasilkan level
+dari swing yang ada, karena menurut buku setiap puncak/lembah memang
+membentuk resistance/support — itu bukan "pola" yang perlu terbukti dulu.
+
+Saat sesuatu tidak terbentuk, UI menjelaskan alasannya (mis. "channeling
+tidak terbentuk: ... tidak dipaksakan"), bukan diam atau menampilkan pola
+setengah jadi.
 
 ## Yang harus dihindari
 

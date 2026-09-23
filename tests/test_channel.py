@@ -68,12 +68,24 @@ class TestBuildChannel:
         basic = _up_basic()
         highs = _series([basic.value_at(i) + 2 for i in range(20)])
         highs.iloc[5] = basic.value_at(5) + 6
-        highs.iloc[11] = basic.value_at(11) + 12  # paling jauh
-        highs.iloc[17] = basic.value_at(17) + 9
+        highs.iloc[11] = basic.value_at(11) + 12  # paling jauh -> jadi titik acuan
+        highs.iloc[17] = basic.value_at(17) + 12  # menyentuh garis yang sama
         lows = _series([basic.value_at(i) - 1 for i in range(20)])
         channel = build_channel(basic, highs, lows, np.array([5, 11, 17]), np.array([0, 4]))
         assert channel.anchor.index == 11
         assert channel.width_at(11) == pytest.approx(12)
+
+    def test_channel_is_not_forced_when_only_one_swing_touches_the_line(self):
+        """Satu titik sentuh belum membuktikan koridor - jangan dipaksakan."""
+        basic = _up_basic()
+        highs = _series([basic.value_at(i) + 2 for i in range(20)])
+        highs.iloc[11] = basic.value_at(11) + 12  # hanya satu swing yang jauh
+        lows = _series([basic.value_at(i) - 1 for i in range(20)])
+        highs_idx, lows_idx = np.array([5, 11, 17]), np.array([0, 4])
+        assert build_channel(basic, highs, lows, highs_idx, lows_idx) is None
+        # Ambang bisa diatur bila pemilik ingin lebih longgar.
+        loose = build_channel(basic, highs, lows, highs_idx, lows_idx, min_touches=1)
+        assert loose is not None and loose.touches == 1
 
     def test_downtrend_channel_line_is_below_and_uses_lows(self):
         basic = _down_basic()

@@ -38,6 +38,8 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Alokasi portofolio & cash (tab Portofolio)
 - [x] Eksekusi & horizon (bagian F) - sebagai status kondisi, bukan label BUY/SELL
 - [x] Checklist kualitatif (dijawab manual, tidak dinilai otomatis)
+- [x] Baca LK mentah (e-book Metode Analisis Fundamental): rasio ROE/ROA/PER/PBV + EDR/EER/EAR dari komponen LK, anualisasi per periode, tolak mutlak, warning kualitas laba & neraca
+- [x] Perbandingan PER/PBV dengan median sektor (jalur opsional; default tetap jalur harga absolut/story)
 - [x] Klasifikasi tren uptrend/downtrend/sideways dari urutan swing high/low (definisi Edianto Ong)
 - [x] Up-/down-trendline dari Low dasar / High puncak, titik acuan harus 'siap' (resistance/support dilewati, atau 50% jaraknya)
 - [x] Status penembusan trendline: valid break (Close di luar garis) vs false break/whipsaw (intraday saja), plus aturan 2nd day (Open sesi berikutnya sebagai konfirmasi akhir)
@@ -45,6 +47,7 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Pullback: uji ulang level yang sudah dilewati, dicatat bertahan (Close di dalam) atau gagal (tembus lagi)
 - [x] Toleransi penembusan trendline per horizon (short 0,5-1,5%, medium 2-3%, long 3,5-5%; default 2%)
 - [x] Channeling: channel line sejajar dari basic trendline; basic tertembus = awal perubahan tren, channel line tertembus = akselerasi
+- [x] The Fan Principle (Bab 14): tiga trendline dari satu pangkal, reversal terkonfirmasi hanya saat garis ketiga tertembus, dua arah, peran garis berbalik
 - [x] Validasi breakout & trading plan (Edianto Ong, contoh McD): breakout sah +1,5%, strong resistance (3x uji), masuk 2nd day, cut-loss 1,5% di bawah support baru, false breakout, keluar saat trendline patah
 - [ ] Detektor pola chart teknikal (menunggu spesifikasi dari buku)
 - [x] Screening massal universe IDX (corong: likuiditas IDX → blacklist → free float IDX → ROE yfinance → valuasi murah PER/PBV, batas small cap untuk semua)
