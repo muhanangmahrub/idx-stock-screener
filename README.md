@@ -53,6 +53,8 @@ Lihat `CLAUDE.md` untuk spesifikasi lengkap dan status tiap bagian.
 - [x] Level support/resistance horizontal: tembus sah via Close, peran berbalik setelah tembus, usia level ditampilkan; level dari Low lembah / High puncak sesuai buku
 - [x] Pullback: uji ulang level yang sudah dilewati, dicatat bertahan (Close di dalam) atau gagal (tembus lagi)
 - [x] Toleransi penembusan trendline per horizon (short 0,5-1,5%, medium 2-3%, long 3,5-5%; default 2%)
+- [x] Gap up/down: celah yang benar-benar tersisa di chart, arti (minat beli / tekanan jual), lonjakan volume, dan klasifikasi common gap (<1 minggu, tanpa lonjakan volume)
+- [x] Volume bar di panel bawah chart: rata-rata, volume relatif, label tinggi/pendek (ambang = asumsi)
 - [x] Channeling: channel line sejajar dari basic trendline; basic tertembus = awal perubahan tren, channel line tertembus = akselerasi
 - [x] The Fan Principle (Bab 14): tiga trendline dari satu pangkal, reversal terkonfirmasi hanya saat garis ketiga tertembus, dua arah, peran garis berbalik
 - [x] Validasi breakout & trading plan (Edianto Ong, contoh McD): breakout sah +1,5%, strong resistance (3x uji), masuk 2nd day, cut-loss 1,5% di bawah support baru, false breakout, keluar saat trendline patah

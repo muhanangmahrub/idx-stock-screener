@@ -58,6 +58,8 @@ idx-screener/
 │   ├── levels.py             # track_level() — support/resistance horizontal, tembus & balik peran
 │   ├── breakout.py           # validasi breakout resistance + trading plan (contoh McD)
 │   ├── channel.py            # channeling: basic trendline + channel line sejajar
+│   ├── volume.py             # volume bar: rata-rata, volume relatif, label tinggi/pendek
+│   ├── gaps.py               # celah kosong: gap up/down, tersisa atau tertutup
 │   ├── fan.py                # the fan principle: konfirmasi reversal pada garis ketiga
 │   ├── patterns.py           # detektor pola teknikal (double top, H&S, dst.)
 │   ├── fundamental.py        # filter value investing (lapis 1)
@@ -76,6 +78,8 @@ idx-screener/
     ├── test_levels.py        # unit test tembus & pembalikan peran level S/R
     ├── test_breakout.py      # unit test breakout & trading plan vs angka contoh McD
     ├── test_channel.py       # unit test channel line & arti penembusannya
+    ├── test_volume.py        # unit test ukuran volume & pembedaan volume nol
+    ├── test_gaps.py          # unit test gap up/down, celah tersisa vs tertutup
     ├── test_fan.py           # unit test kipas tiga trendline & konfirmasi reversal
     └── test_fundamental.py   # unit test filter fundamental
 ```
@@ -429,6 +433,66 @@ dengan konfirmasi bertingkat.
   setelah garis pertama tertembus (`min_broken_lines`, default 1) — sebelum
   itu yang ada cuma trendline biasa, jadi `detect_fan` mengembalikan None.
 - Sinyal untuk ditinjau manual, bukan eksekusi otomatis.
+
+### I. Volume (sudah di volume.py + panel bawah chart)
+
+- Volume dicatat sebagai **batang (volume bar)**, ditampilkan di bagian
+  bawah chart harga.
+- Batang **tinggi** = jumlah perdagangan besar dari pelaku pasar.
+- Batang **pendek** = aktivitas minim / minat kurang.
+- ASUMSI (bukan angka buku, wajib dikalibrasi): "tinggi" = ≥1,5× rata-rata
+  20 bar sebelumnya, "pendek" = ≤0,5× (`DEFAULT_HIGH_RATIO`,
+  `DEFAULT_LOW_RATIO`, `DEFAULT_WINDOW`). Rata-rata sengaja memakai bar
+  SEBELUM bar itu supaya lonjakan tidak mengangkat pembandingnya sendiri.
+- Warna batang mengikuti arah candle — konvensi umum, bukan aturan buku.
+- Volume 0 (pre-opening di data intraday IDX) dilabeli "tanpa perdagangan",
+  dibedakan dari minat rendah, dan tidak ikut menurunkan rata-rata.
+
+**BELUM diberikan buku — tanyakan sebelum mengimplementasikan:** bagaimana
+volume dipakai untuk mengonfirmasi pola/breakout/trendline, dan apakah ada
+angka pembanding resmi untuk menyebut sebuah bar tinggi.
+
+### J. Gap (sudah di gaps.py + arsiran di chart)
+
+- Gap = celah kosong di chart akibat lonjakan harga karena **tidak ada
+  transaksi** pada level harga tersebut.
+- **Gap up**: pembukaan sesi berikutnya melonjak sehingga ada kesenjangan
+  dengan harga **tertinggi** sesi sebelumnya. **Gap down**: pembukaan
+  meninggalkan harga **terendah** sesi sebelumnya.
+- Celah baru benar-benar **meninggalkan gap pada chart** bila tidak
+  tertutupi oleh pergerakan harga di sesi baru itu. Karena itu kode
+  membedakan dua hal: `lower`/`upper` = lompatan saat pembukaan, dan
+  `visible_zone` = celah yang tersisa setelah sesi itu selesai (None bila
+  tertutup). `only_remaining=True` hanya mengambil yang tersisa.
+- Gap bisa dianalisis di berbagai timeframe, **paling umum daily chart**
+  (`PREFERRED_INTERVAL`); UI memberi catatan bila intervalnya bukan harian.
+- ASUMSI (bukan buku): ukuran minimum agar disebut gap, default 0 (sekecil
+  apa pun dihitung) lewat `min_size_pct`.
+- `filled_index` mencatat kapan harga KEMUDIAN kembali masuk zona celah.
+  Itu pengamatan faktual; **arti** penutupan gap belum diberikan buku, jadi
+  tidak disimpulkan.
+
+**Arti gap (buku, 2026-10-01):** gap up menunjukkan dorongan/minat beli
+yang tinggi, gap down menandakan tekanan jual yang kuat. Karena itu gap
+sering ditandai volume transaksi yang meningkat drastis.
+
+**Klasifikasi — baru satu jenis yang diberikan:**
+
+- **Common gap**: paling sering terjadi dan **kurang penting**. Ciri:
+  (a) biasanya TIDAK didukung peningkatan volume yang signifikan, dan
+  (b) celahnya sering tertutup kembali dalam tempo relatif cepat —
+  biasanya **kurang dari 1 minggu** (`COMMON_GAP_MAX_DAYS = 7`, dihitung
+  dalam hari kalender dari indeks tanggal supaya berlaku untuk semua
+  interval).
+- Gap dengan lonjakan volume **bukan** common, tetapi jenisnya TIDAK
+  ditebak → `GAP_UNCLASSIFIED`. Gap yang belum tertutup dan umurnya belum
+  melewati tenggat → `GAP_UNDETERMINED` (masih mungkin jadi common).
+- Ambang "lonjakan volume signifikan" memakai `volume.DEFAULT_HIGH_RATIO`
+  (1,5× — ASUMSI, bukan angka buku).
+
+**BELUM diberikan buku — tanyakan:** jenis gap lain (breakaway, runaway,
+exhaustion) beserta cirinya, apakah gap wajib ditutup, dan bagaimana gap
+dipakai untuk konfirmasi breakout/pola.
 
 ### H. Validasi breakout & trading plan (sudah di breakout.py, contoh McD)
 

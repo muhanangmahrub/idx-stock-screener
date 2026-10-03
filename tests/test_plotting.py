@@ -29,13 +29,15 @@ from screener.trend import build_trendline, check_trendline_break, classify_tren
 
 
 def _chart(n_bars=120, freq="B"):
-    """OHLC sintetis zigzag naik dengan tanggal nyata (ada celah akhir pekan)."""
+    """OHLCV sintetis zigzag naik dengan tanggal nyata (ada celah akhir pekan)."""
     dates = pd.date_range("2025-01-06", periods=n_bars, freq=freq, tz="Asia/Jakarta")
     wave = np.sin(np.linspace(0, 6 * np.pi, n_bars)) * 40
     close = pd.Series(1000 + np.linspace(0, 300, n_bars) + wave, index=dates)
+    # Volume ikut bergelombang supaya ada bar tinggi maupun pendek.
+    volume = pd.Series(1_000_000 + np.abs(wave) * 20_000, index=dates)
     return pd.DataFrame(
         {"Open": close.shift(1).fillna(close.iloc[0]), "High": close + 15,
-         "Low": close - 15, "Close": close}
+         "Low": close - 15, "Close": close, "Volume": volume}
     )
 
 
@@ -108,6 +110,54 @@ def _full_chart_figure(df, distance=5, tol=0.02):
         position = evaluate_breakout_position(plan, signal.entry_index, df["Close"])
         add_breakout_plan(fig, df, signal, plan, position)
     return fig
+
+
+class TestVolumePanel:
+    """Volume digambar sebagai batang di panel bawah, sejajar candle-nya."""
+
+    def test_volume_panel_is_added_when_volume_exists(self):
+        df = _chart()
+        fig = plot_candlestick(df)
+        volume = next(t for t in fig.data if t.name == "Volume")
+        assert volume.type == "bar"
+        assert list(volume.y) == list(df["Volume"])
+        assert list(volume.x) == list(range(len(df)))
+
+    def test_volume_sits_on_its_own_axis_below_price(self):
+        fig = plot_candlestick(_chart())
+        volume = next(t for t in fig.data if t.name == "Volume")
+        price = next(t for t in fig.data if t.type == "candlestick")
+        assert volume.yaxis == "y2"  # panel terpisah
+        assert price.yaxis in (None, "y")  # panel harga tetap yang utama
+        # Panel volume harus lebih pendek daripada panel harga.
+        y_domain = fig.layout.yaxis.domain
+        y2_domain = fig.layout.yaxis2.domain
+        assert (y_domain[1] - y_domain[0]) > (y2_domain[1] - y2_domain[0])
+        assert y2_domain[1] <= y_domain[0]
+
+    def test_volume_can_be_switched_off(self):
+        fig = plot_candlestick(_chart(), show_volume=False)
+        assert all(t.name != "Volume" for t in fig.data)
+
+    def test_frame_without_volume_column_still_plots(self):
+        df = _chart().drop(columns=["Volume"])
+        fig = plot_candlestick(df)
+        assert all(t.name != "Volume" for t in fig.data)
+
+    def test_overlays_stay_on_the_price_panel(self):
+        df = _chart()
+        fig = _full_chart_figure(df)
+        for trace in fig.data:
+            if trace.name == "Volume":
+                continue
+            assert trace.yaxis in (None, "y"), f"{trace.name} tidak di panel harga"
+
+    def test_bar_colour_follows_the_candle_direction(self):
+        df = _chart()
+        fig = plot_candlestick(df)
+        colors = next(t for t in fig.data if t.name == "Volume").marker.color
+        rising = (df["Close"] >= df["Open"]).tolist()
+        assert [c == "green" for c in colors] == rising
 
 
 class TestEveryOverlayStaysOnTheGrid:

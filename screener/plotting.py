@@ -18,11 +18,17 @@ mingguan) dan untuk parameter apa pun.
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from screener.levels import SUPPORT
 from screener.trend import UP_TRENDLINE
+from screener.volume import VOLUME_HIGH, VOLUME_LOW, volume_profiles
 
 MAX_DATE_TICKS = 10
+# Panel volume dibuat jauh lebih pendek daripada panel harga: perannya
+# pendukung, bukan pusat perhatian (buku menaruhnya "di bagian bawah chart").
+PRICE_PANEL_SHARE = 0.78
+VOLUME_PANEL_SHARE = 0.22
 
 
 def bar_positions(df: pd.DataFrame) -> np.ndarray:
@@ -54,28 +60,44 @@ def plot_candlestick(
     title: str = "",
     highs_idx: np.ndarray | None = None,
     lows_idx: np.ndarray | None = None,
+    show_volume: bool = True,
 ) -> go.Figure:
     """Buat candlestick chart dari DataFrame OHLC (kolom Open/High/Low/Close).
 
     `highs_idx`/`lows_idx` opsional: indeks posisi (hasil `get_extrema`) untuk
     menandai swing high/low di atas chart, sebagai bantuan visual sebelum
     detektor pola (Lapis 2) tersedia.
+
+    `show_volume` menambahkan panel volume bar di bawah panel harga (sesuai
+    penempatan di buku), memakai sumbu x yang sama sehingga tiap batang
+    volume sejajar dengan candle-nya. Panel volume dilewati bila kolom
+    Volume tidak ada.
     """
     x = bar_positions(df)
     dates = _date_labels(df)
-    fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=x,
-                open=df["Open"],
-                high=df["High"],
-                low=df["Low"],
-                close=df["Close"],
-                name="Harga",
-                text=dates,  # tanggal tetap terbaca di hover meski sumbunya posisi
-            )
-        ]
+    with_volume = show_volume and "Volume" in df.columns
+
+    if with_volume:
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+            row_heights=[PRICE_PANEL_SHARE, VOLUME_PANEL_SHARE],
+        )
+    else:
+        fig = go.Figure()
+
+    fig.add_trace(
+        go.Candlestick(
+            x=x,
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
+            close=df["Close"],
+            name="Harga",
+            text=dates,  # tanggal tetap terbaca di hover meski sumbunya posisi
+        )
     )
+    if with_volume:
+        add_volume_bars(fig, df)
 
     if highs_idx is not None and len(highs_idx) > 0:
         fig.add_trace(
@@ -100,7 +122,57 @@ def plot_candlestick(
         )
 
     fig.update_layout(title=title, xaxis_rangeslider_visible=False)
+    if with_volume:
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
     _apply_date_axis(fig, df)
+    return fig
+
+
+def add_volume_bars(fig: go.Figure, df: pd.DataFrame, row: int = 2, col: int = 1) -> go.Figure:
+    """Panel volume bar di bawah chart harga (aturan buku: volume dicatat
+    sebagai batang di bagian bawah chart; batang tinggi = perdagangan ramai,
+    batang pendek = minat kurang).
+
+    Warna mengikuti arah candle-nya (hijau bila Close >= Open) supaya mudah
+    dibaca bersama harga - itu konvensi umum, bukan aturan buku. Batang yang
+    volumenya jauh di atas kebiasaan diberi warna pekat supaya "tinggi"
+    terbaca sebagai ukuran, bukan kesan; ambangnya asumsi yang bisa diatur
+    lewat `screener.volume`.
+    """
+    profiles = volume_profiles(df)
+    labels = [p.label for p in profiles]
+    ratios = [p.ratio for p in profiles]
+    rising = df["Close"] >= df["Open"]
+
+    colors, opacities = [], []
+    for up, label in zip(rising, labels, strict=True):
+        colors.append("green" if up else "red")
+        opacities.append(
+            1.0 if label == VOLUME_HIGH else (0.35 if label == VOLUME_LOW else 0.65)
+        )
+
+    fig.add_trace(
+        go.Bar(
+            x=bar_positions(df),
+            y=df["Volume"],
+            marker=dict(
+                color=colors,
+                opacity=opacities,
+                line=dict(width=0),
+            ),
+            name="Volume",
+            customdata=[
+                [label, "-" if ratio is None else f"{ratio:.1f}x"]
+                for label, ratio in zip(labels, ratios, strict=True)
+            ],
+            hovertemplate=(
+                "volume %{y:,.0f}<br>%{customdata[0]} "
+                "(%{customdata[1]} rata-rata)<extra></extra>"
+            ),
+        ),
+        row=row,
+        col=col,
+    )
     return fig
 
 
@@ -383,5 +455,50 @@ def add_fan(fig: go.Figure, df: pd.DataFrame, fan) -> go.Figure:
                 marker=dict(symbol="star-diamond", color=color, size=15),
                 name=f"Reversal {fan.direction} terkonfirmasi",
             )
+        )
+    return fig
+
+
+def add_gaps(fig: go.Figure, df: pd.DataFrame, gaps, row: int = 1, col: int = 1) -> go.Figure:
+    """Arsir celah kosong (hasil `gaps.detect_gaps`) di panel harga.
+
+    Yang digambar adalah zona yang BENAR-BENAR tersisa di chart setelah sesi
+    pembukanya selesai (`Gap.visible_zone`) - sesuai buku, lompatan yang
+    tertutup pergerakan sesi itu sendiri tidak meninggalkan gap. Zona
+    dibentang dari bar pembuka sampai bar yang menutupnya (atau bar terakhir
+    bila belum tertutup), supaya terlihat berapa lama celah itu bertahan.
+    """
+    for gap in gaps:
+        zone = gap.visible_zone
+        if zone is None:
+            continue
+        lower, upper = zone
+        end = gap.filled_index if gap.filled_index is not None else len(df) - 1
+        color = "rgba(0,200,120,0.18)" if gap.is_up else "rgba(230,70,70,0.18)"
+        fig.add_shape(
+            type="rect",
+            x0=gap.index - 0.5, x1=max(end, gap.index) + 0.5,
+            y0=lower, y1=upper,
+            fillcolor=color, line=dict(width=0), layer="below",
+            row=row, col=col,
+        )
+        # Titik tak terlihat untuk hover: shape tidak bisa menampilkan tooltip.
+        fig.add_trace(
+            go.Scatter(
+                x=[gap.index],
+                y=[(lower + upper) / 2],
+                mode="markers",
+                marker=dict(symbol="diamond-wide", size=9,
+                            color="green" if gap.is_up else "red", opacity=0.8),
+                name=f"{gap.kind} {gap.size_pct:.1f}%",
+                showlegend=False,
+                hovertemplate=(
+                    f"{gap.kind} {gap.size_pct:.1f}%<br>"
+                    f"zona {lower:,.0f}–{upper:,.0f}<br>"
+                    f"{'sudah tertutup' if gap.is_filled else 'masih terbuka'}"
+                    "<extra></extra>"
+                ),
+            ),
+            row=row, col=col,
         )
     return fig

@@ -45,6 +45,7 @@ from screener.fundamental import (
     is_cheap_valuation,
     passes_initial_screening,
 )
+from screener.gaps import COMMON_GAP_MAX_DAYS, detect_gaps, is_preferred_interval
 from screener.idx_data import get_stock_summary
 from screener.levels import SUPPORT
 from screener.patterns import scan
@@ -53,6 +54,7 @@ from screener.plotting import (
     add_breakout_plan,
     add_channel,
     add_fan,
+    add_gaps,
     add_levels,
     add_trendline,
     plot_candlestick,
@@ -92,6 +94,7 @@ from screener.universe import (
     filter_liquid_stocks,
     screen_universe,
 )
+from screener.volume import volume_profiles
 
 st.set_page_config(page_title="IDX Stock Screener", layout="wide")
 
@@ -951,6 +954,8 @@ with tab_teknikal:
             if fan is not None:
                 add_fan(fig, prices_df, fan)
             add_levels(fig, prices_df, sr_levels)
+            chart_gaps = detect_gaps(prices_df, only_remaining=True)
+            add_gaps(fig, prices_df, chart_gaps)
 
             # Resistance yang berdekatan sering memicu rencana yang sama; supaya
             # chart tidak penuh, gambar hanya rencana dengan tanggal masuk terbaru.
@@ -961,6 +966,103 @@ with tab_teknikal:
                 )
 
             st.plotly_chart(fig, width="stretch")
+
+            profiles = volume_profiles(prices_df)
+            if profiles:
+                last = profiles[-1]
+                recent_high = [p for p in profiles[-20:] if p.is_high]
+                c = st.columns(3)
+                c[0].metric(
+                    "Volume bar terakhir",
+                    f"{last.volume:,.0f}",
+                    help="Jumlah saham yang diperdagangkan pada bar terakhir.",
+                )
+                c[1].metric(
+                    "Dibanding kebiasaan",
+                    "—" if last.ratio is None else f"{last.ratio:.1f}x ({last.label})",
+                    help="Volume bar dibagi rata-rata volume 20 bar sebelumnya. "
+                    "Ambang 'tinggi' (≥1,5x) dan 'pendek' (≤0,5x) adalah ASUMSI, "
+                    "bukan angka dari buku — kalibrasi ke contoh chart.",
+                )
+                c[2].metric(
+                    "Bar volume tinggi (20 bar terakhir)",
+                    len(recent_high),
+                    help="Bar dengan volume jauh di atas kebiasaan — menurut buku "
+                    "menandakan perdagangan ramai dari pelaku pasar.",
+                )
+                st.caption(
+                    "Panel bawah chart adalah volume bar: batang tinggi berarti "
+                    "jumlah perdagangan besar dari pelaku pasar, batang pendek "
+                    "berarti aktivitas minim atau minat kurang. Batang bervolume "
+                    "jauh di atas kebiasaan digambar lebih pekat. Aturan pemakaian "
+                    "volume untuk konfirmasi pola belum diberikan dari buku, jadi "
+                    "volume di sini baru informasi untuk dibaca manual."
+                )
+
+            if chart_gaps:
+                open_gaps = [g for g in chart_gaps if not g.is_filled]
+                common = [g for g in chart_gaps if g.is_common]
+                with st.expander(
+                    f"Gap ({len(chart_gaps)} celah tersisa di chart, "
+                    f"{len(common)} common gap, {len(open_gaps)} belum tertutup)",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Gap adalah celah kosong akibat lonjakan harga karena tidak "
+                        "ada transaksi di level itu. Gap up: pembukaan melonjak di "
+                        "atas harga tertinggi sesi sebelumnya; gap down: di bawah "
+                        "harga terendah sesi sebelumnya. Lompatan yang langsung "
+                        "tertutup pergerakan sesi itu sendiri tidak dihitung — yang "
+                        "didaftar di sini hanya celah yang benar-benar tertinggal. "
+                        "Gap up menunjukkan dorongan/minat beli yang tinggi, gap down "
+                        "tekanan jual yang kuat — karena itu gap sering disertai volume "
+                        f"yang meningkat drastis. **Common gap** (tanpa lonjakan volume "
+                        f"dan tertutup kembali < {COMMON_GAP_MAX_DAYS} hari) adalah jenis "
+                        "yang paling sering terjadi dan kurang penting. Jenis gap lain "
+                        "belum diberikan dari buku, jadi gap yang bukan common tidak "
+                        "ditebak jenisnya."
+                    )
+                    if not is_preferred_interval(interval):
+                        st.info(
+                            f"Buku menyebut gap paling umum dianalisis pada daily "
+                            f"chart; sekarang interval {interval}."
+                        )
+                    dates = prices_df.index
+                    st.dataframe(
+                        pd.DataFrame(
+                            {
+                                "Jenis": [g.kind for g in chart_gaps],
+                                "Tanggal": [
+                                    dates[g.index].strftime("%Y-%m-%d") for g in chart_gaps
+                                ],
+                                "Zona Bawah": [g.visible_zone[0] for g in chart_gaps],
+                                "Zona Atas": [g.visible_zone[1] for g in chart_gaps],
+                                "Lompatan (%)": [round(g.size_pct, 2) for g in chart_gaps],
+                                "Volume": [
+                                    "—" if g.volume_ratio is None else f"{g.volume_ratio:.1f}x"
+                                    for g in chart_gaps
+                                ],
+                                "Klasifikasi": [g.kind_label for g in chart_gaps],
+                                "Arti": [g.pressure for g in chart_gaps],
+                                "Status": [
+                                    "tertutup" if g.is_filled else "masih terbuka"
+                                    for g in chart_gaps
+                                ],
+                                "Tertutup pada": [
+                                    dates[g.filled_index].strftime("%Y-%m-%d")
+                                    if g.is_filled
+                                    else "-"
+                                    for g in chart_gaps
+                                ],
+                                "Lama (hari)": [
+                                    g.days_to_fill if g.is_filled else g.days_open
+                                    for g in chart_gaps
+                                ],
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
 
             if is_last_bar_provisional(prices_df, interval):
                 st.warning(
